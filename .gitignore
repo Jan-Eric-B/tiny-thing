@@ -3,7 +3,10 @@
 
 # Settings window (web)
 node_modules/
-/crates/tray/ui/dist/
+/crates/tray-app/ui/dist/
+
+# Tauri build output (permission schemas, regenerated on every build)
+/crates/tray-app/gen/
 
 # Yocto / kas build output and caches
 /os/build/

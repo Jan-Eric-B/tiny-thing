@@ -1,0 +1,31 @@
+[package]
+name = "tray-app"
+description = "The Tray app: the Tauri shell and the platform adapters around the Tray core."
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+publish.workspace = true
+
+# Windows only so far: on other systems the binary is a stub that says so, so
+# the workspace builds there without Tauri's system libraries (webkit2gtk and
+# friends). The Linux and macOS adapters (v2) lift this gate.
+[target.'cfg(windows)'.dependencies]
+clap.workspace = true
+protocol.workspace = true
+tauri = { workspace = true, features = ["tray-icon"] }
+thiserror.workspace = true
+tokio = { workspace = true, features = ["macros", "rt", "sync", "time"] }
+tracing.workspace = true
+tracing-subscriber.workspace = true
+tray-core.workspace = true
+windows = { workspace = true, features = ["Media_Control"] }
+
+# Not gated: build scripts run on the host, which can differ from the target,
+# so build.rs asks Cargo for the target instead (no Tauri system libraries
+# are needed to build tauri-build itself).
+[build-dependencies]
+tauri-build.workspace = true
+
+[lints]
+workspace = true

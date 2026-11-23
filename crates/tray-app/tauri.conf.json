@@ -1,0 +1,12 @@
+{
+  "$schema": "https://schema.tauri.app/config/2",
+  "productName": "TinyThing",
+  "identifier": "io.github.jan-eric-b.tiny-thing",
+  "app": {
+    "windows": []
+  },
+  "bundle": {
+    "active": false,
+    "icon": ["icons/icon.ico"]
+  }
+}
