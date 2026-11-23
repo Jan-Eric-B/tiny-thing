@@ -171,6 +171,51 @@ fn the_on_screen_controls_send_their_actions() {
 }
 
 #[test]
+fn a_pressed_control_shrinks_its_circle_until_released() {
+    let harness = Harness::new();
+    harness.report(PlaybackState::Playing);
+    let control = ElementHandle::find_by_accessible_label(&harness.window, "Next")
+        .next()
+        .unwrap();
+    let circle = || {
+        control
+            .query_descendants()
+            .match_id("ControlButton::circle")
+            .find_first()
+            .expect("the control has no circle")
+            .size()
+    };
+    let resting = circle();
+    let (position, size) = (control.absolute_position(), control.size());
+    let center = LogicalPosition::new(
+        position.x + size.width / 2.0,
+        position.y + size.height / 2.0,
+    );
+    let window = harness.window.window();
+
+    window.dispatch_event(WindowEvent::PointerMoved { position: center });
+    window.dispatch_event(WindowEvent::PointerPressed {
+        position: center,
+        button: PointerEventButton::Left,
+    });
+    let pressed = circle();
+    window.dispatch_event(WindowEvent::PointerReleased {
+        position: center,
+        button: PointerEventButton::Left,
+    });
+
+    // Clearly smaller, still round, and back to its size once released.
+    assert!(
+        pressed.width <= resting.width * 0.92,
+        "pressed {pressed:?}, resting {resting:?}"
+    );
+    assert_eq!(pressed.width, pressed.height);
+    assert_eq!(circle(), resting);
+    // The touch target stays the same.
+    assert_eq!(control.size(), size);
+}
+
+#[test]
 fn no_on_screen_controls_while_nothing_plays() {
     let harness = Harness::new();
     harness.screen.show(DaemonMessage::NowPlaying(None));

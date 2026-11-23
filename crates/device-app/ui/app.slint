@@ -29,10 +29,11 @@ export enum TouchControl {
 
 // Colors the Device app shares with the Tray app's Artwork pipeline.
 export global Theme {
-    // Laid over a control's circle while it is pressed. The Accent the icons
-    // take is chosen to stand out on the Backdrop with this on top, so it
-    // must stay PRESSED_CONTROL_WHITE_ALPHA in the protocol.
-    out property <color> pressed-control-tint: #ffffff40;
+    // A control's circle, laid over the Backdrop. The Accent the icons take
+    // is chosen to stand out on the Backdrop with this on top, so it must
+    // stay CONTROL_CIRCLE_WHITE_ALPHA in the protocol, and the circle never
+    // gets lighter (a pressed control shrinks instead).
+    out property <color> control-circle-tint: #ffffff1a;
 }
 
 // Icons on a 24x24 grid.
@@ -124,7 +125,11 @@ component VolumeIndicator inherits Rectangle {
 }
 
 // A round control. Every control has the same touch target, however large
-// its circle is drawn, so a row of them lines up.
+// its circle is drawn, so a row of them lines up. Pressed, the circle and its
+// icon shrink a little; the circle keeps its color, so the icon never stands
+// on anything lighter than at rest, where the Accent is chosen to stand out.
+// Resized rather than with transform-scale, which Slint documents as not
+// available in its software renderer.
 component ControlButton {
     in property <string> label;
     in property <string> icon;
@@ -148,19 +153,19 @@ component ControlButton {
         }
     }
 
-    Rectangle {
+    circle := Rectangle {
         x: (parent.width - self.width) / 2;
         y: (parent.height - self.height) / 2;
-        width: root.size;
-        height: root.size;
-        border-radius: root.size / 2;
-        background: touch.pressed ? Theme.pressed-control-tint : #ffffff1a;
+        width: touch.pressed ? root.size * 0.9 : root.size;
+        height: self.width;
+        border-radius: self.width / 2;
+        background: Theme.control-circle-tint;
 
         Path {
             x: (parent.width - self.width) / 2;
             y: (parent.height - self.height) / 2;
-            width: root.size * 0.45;
-            height: root.size * 0.45;
+            width: parent.width * 0.45;
+            height: parent.width * 0.45;
             viewbox-width: 24;
             viewbox-height: 24;
             commands: root.icon;

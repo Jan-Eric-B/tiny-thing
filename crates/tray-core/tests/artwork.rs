@@ -1,8 +1,8 @@
 //! Seam 1: the Artwork of Now Playing travels from the `MediaSource` through
 //! the Tray core and the Device daemon to the Device app, scaled to the exact
 //! size the Device draws, with a Backdrop that white text stays readable on
-//! and a colored Accent that the icons stay readable in, also on a pressed
-//! control.
+//! and a colored Accent that the icons stay readable in on a control's
+//! circle, and that is no darker than those two need.
 
 // Test code fails loudly on purpose.
 #![allow(clippy::unwrap_used)]
@@ -12,7 +12,7 @@ mod support;
 use image::{ImageFormat, RgbImage};
 use protocol::local::DaemonMessage;
 use protocol::{
-    ArtworkId, DeviceMessage, Handshake, MessageReader, MessageWriter, PRESSED_CONTROL_WHITE_ALPHA,
+    ArtworkId, CONTROL_CIRCLE_WHITE_ALPHA, DeviceMessage, Handshake, MessageReader, MessageWriter,
     RgbPixels, SoftwareVersion, TrayMessage,
 };
 use std::io::Cursor;
@@ -140,10 +140,10 @@ fn contrast(a: [u8; 3], b: [u8; 3]) -> f64 {
     contrast_of(luminance(a), luminance(b))
 }
 
-/// The luminance of a Backdrop pixel under a pressed control: the Device
+/// The luminance of a Backdrop pixel under a control's circle: the Device
 /// app lays white over it, blending sRGB values.
-fn pressed(pixel: [u8; 3]) -> f64 {
-    let alpha = f64::from(PRESSED_CONTROL_WHITE_ALPHA) / 255.0;
+fn on_control(pixel: [u8; 3]) -> f64 {
+    let alpha = f64::from(CONTROL_CIRCLE_WHITE_ALPHA) / 255.0;
     luminance_of(pixel.map(|component| f64::from(component) * (1.0 - alpha) + 255.0 * alpha))
 }
 
@@ -419,7 +419,7 @@ async fn white_text_is_readable_on_the_backdrop_of_every_test_cover() {
 }
 
 #[tokio::test]
-async fn the_accent_stands_out_on_a_pressed_control_anywhere_on_the_backdrop_of_every_test_cover() {
+async fn the_accent_stands_out_on_a_control_anywhere_on_the_backdrop_of_every_test_cover() {
     let (_daemon, mut device_app, media) = connected().await;
 
     for (title, cover) in test_covers() {
@@ -428,11 +428,45 @@ async fn the_accent_stands_out_on_a_pressed_control_anywhere_on_the_backdrop_of_
         let accent = luminance(accent(&artwork));
         let backdrop = pixels(artwork.backdrop());
         let worst = each_pixel(&backdrop)
-            .map(|pixel| contrast_of(accent, pressed(pixel)))
+            .map(|pixel| contrast_of(accent, on_control(pixel)))
             .fold(f64::INFINITY, f64::min);
         assert!(
             worst >= 4.5,
-            "{title}: the Accent on a pressed control is {worst:.2}:1"
+            "{title}: the Accent on a control is {worst:.2}:1"
+        );
+    }
+}
+
+#[tokio::test]
+async fn the_backdrop_of_a_bright_cover_is_darkened_no_further_than_text_and_accent_need() {
+    let (_daemon, mut device_app, media) = connected().await;
+    let red_square = cover(300, 300, |x, y| {
+        if (140..160).contains(&x) && (140..160).contains(&y) {
+            [255, 0, 0]
+        } else {
+            WHITE
+        }
+    });
+    let blue_and_white = cover(300, 300, |x, _| if x < 150 { [0, 0, 30] } else { WHITE });
+
+    for (title, cover) in [
+        ("white", plain_cover(WHITE)),
+        ("bright yellow", plain_cover([255, 240, 60])),
+        ("light pink", plain_cover([250, 200, 210])),
+        ("white with a small red square", red_square),
+        ("half deep blue, half white", blue_and_white),
+    ] {
+        let artwork = shown(&media, &mut device_app, title, cover).await;
+
+        // The tighter of the two contrasts at the Backdrop's worst pixel is
+        // just above 4.5:1, not far beyond it: darker would only be gloomier.
+        let accent = luminance(accent(&artwork));
+        let tightest = each_pixel(&pixels(artwork.backdrop()))
+            .map(|pixel| contrast(pixel, WHITE).min(contrast_of(accent, on_control(pixel))))
+            .fold(f64::INFINITY, f64::min);
+        assert!(
+            tightest < 4.75,
+            "{title}: darkened to {tightest:.2}:1 where 4.5:1 is needed"
         );
     }
 }
@@ -477,7 +511,7 @@ async fn the_accent_of_a_colored_cover_is_clearly_colored_in_its_hue() {
         let accent = accent(&shown(&media, &mut device_app, title, cover).await);
 
         // Even the darkest hue, blue, keeps a quarter of its saturation once
-        // light enough for a pressed control.
+        // light enough for a control.
         assert!(
             saturation(accent) >= 0.25,
             "{title}: the Accent {accent:?} is nearly white"
@@ -513,7 +547,7 @@ async fn the_accent_of_a_gray_cover_is_white() {
 #[tokio::test]
 async fn the_backdrop_of_a_dark_cover_is_not_darkened_further() {
     let (_daemon, mut device_app, media) = connected().await;
-    // Dark enough for white text, and for its Accent on a pressed control.
+    // Dark enough for white text, and for its Accent on a control.
     let dark_blue = [10, 20, 45];
 
     let artwork = shown(&media, &mut device_app, "Dark", plain_cover(dark_blue)).await;

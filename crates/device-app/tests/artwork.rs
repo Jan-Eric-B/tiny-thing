@@ -10,7 +10,7 @@ use device_app::{AppWindow, Theme};
 use i_slint_backend_testing::ElementHandle;
 use protocol::local::DaemonMessage;
 use protocol::{
-    ARTWORK_BOX, Artwork, ArtworkId, Image, NowPlaying, PRESSED_CONTROL_WHITE_ALPHA, PlaybackState,
+    ARTWORK_BOX, Artwork, ArtworkId, CONTROL_CIRCLE_WHITE_ALPHA, Image, NowPlaying, PlaybackState,
     Rgb, RgbPixels, SCREEN_HEIGHT, SCREEN_WIDTH,
 };
 use slint::{Color, ComponentHandle, LogicalPosition, LogicalSize};
@@ -277,13 +277,13 @@ fn a_song_whose_artwork_could_not_be_had_shows_it_when_it_arrives_after_all() {
 }
 
 #[test]
-fn the_pressed_control_tint_is_the_one_the_accent_is_chosen_for() {
+fn the_control_circle_tint_is_the_one_the_accent_is_chosen_for() {
     let harness = Harness::new();
 
-    let tint = harness.window.global::<Theme>().get_pressed_control_tint();
+    let tint = harness.window.global::<Theme>().get_control_circle_tint();
 
     assert_eq!(
         tint,
-        Color::from_argb_u8(PRESSED_CONTROL_WHITE_ALPHA, 255, 255, 255)
+        Color::from_argb_u8(CONTROL_CIRCLE_WHITE_ALPHA, 255, 255, 255)
     );
 }

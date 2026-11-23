@@ -21,7 +21,7 @@ mod percent;
 mod version;
 
 pub use artwork::{
-    ARTWORK_BOX, Artwork, ArtworkError, ArtworkId, Image, ImageError, PRESSED_CONTROL_WHITE_ALPHA,
+    ARTWORK_BOX, Artwork, ArtworkError, ArtworkId, CONTROL_CIRCLE_WHITE_ALPHA, Image, ImageError,
     Rgb, RgbPixels, SCREEN_HEIGHT, SCREEN_WIDTH,
 };
 pub use frame::{FrameError, MAX_FRAME_LEN, MessageReader, MessageWriter};

@@ -9,7 +9,7 @@ use fast_image_resize::{
     ResizeOptions, Resizer, create_srgb_mapper,
 };
 use protocol::{
-    ARTWORK_BOX, ArtworkError, ArtworkId, Image, ImageError, PRESSED_CONTROL_WHITE_ALPHA, Rgb,
+    ARTWORK_BOX, ArtworkError, ArtworkId, CONTROL_CIRCLE_WHITE_ALPHA, Image, ImageError, Rgb,
     RgbPixels, SCREEN_HEIGHT, SCREEN_WIDTH,
 };
 use std::io::Cursor;
@@ -17,7 +17,7 @@ use std::io::Cursor;
 /// The version of this pipeline, part of every [`ArtworkId`]. Raise it when
 /// the pipeline makes different pixels or Accents from the same image, so
 /// the Device does not show Artwork it kept from an older Tray app.
-pub(crate) const PIPELINE_VERSION: u32 = 1;
+pub(crate) const PIPELINE_VERSION: u32 = 2;
 
 /// The largest source image read, per side. Media players hand out a few
 /// hundred to a few thousand pixels. At this size the pipeline takes about
@@ -38,7 +38,7 @@ const MAX_ENLARGEMENT: u32 = 2;
 const BACKDROP_BLUR_SIZE: (u32, u32) = (40, 24);
 
 /// The least contrast (WCAG 2) of white text on the Backdrop and of the
-/// Accent on a pressed control on the Backdrop.
+/// Accent on a control's circle on the Backdrop.
 const MIN_CONTRAST: f64 = 4.5;
 
 /// Kept beyond [`MIN_CONTRAST`] so the Device's own rounding cannot fall
@@ -50,9 +50,9 @@ const CONTRAST_MARGIN: f64 = 0.01;
 /// [`ACCENT_MIN_LUMINANCE`] needs.
 const ACCENT_SATURATION: f64 = 0.5;
 
-/// The least luminance (WCAG 2) of the Accent. A pressed control lays white
+/// The least luminance (WCAG 2) of the Accent. A control's circle lays white
 /// over the Backdrop, so even on a black Backdrop the Accent needs about
-/// 0.41 for 4.5:1; the lighter the Accent, the less the Backdrop has to be
+/// 0.22 for 4.5:1; the lighter the Accent, the less the Backdrop has to be
 /// darkened for it.
 const ACCENT_MIN_LUMINANCE: f64 = 0.55;
 
@@ -273,22 +273,23 @@ fn accent(colors: &Pixels<'_>) -> [u8; 3] {
 
 /// Darkens `backdrop` (all pixels by the same factor, in linear light) as
 /// little as needed for white text on every pixel, and for `accent` on a
-/// pressed control (white at [`PRESSED_CONTROL_WHITE_ALPHA`] laid over the
+/// control's circle (white at [`CONTROL_CIRCLE_WHITE_ALPHA`] laid over the
 /// Backdrop) on every pixel, each by [`MIN_CONTRAST`]. A Backdrop that has
-/// both already stays as it is.
+/// both already stays as it is. A pressed control only shrinks its circle,
+/// so the icons are never drawn on anything lighter.
 fn darken(backdrop: &mut Pixels<'_>, accent: [u8; 3]) {
     let required = MIN_CONTRAST + CONTRAST_MARGIN;
     // White's luminance is 1: (1 + 0.05) / (L + 0.05) >= required.
     let brightest_for_text = 1.05 / required - 0.05;
-    let brightest_pressed = (luminance(accent) + 0.05) / required - 0.05;
+    let brightest_on_control = (luminance(accent) + 0.05) / required - 0.05;
     let readable = |factor: f64| {
         let darkened = darkening(factor);
         // Per channel: the pixel's share of the luminance, without and with
-        // the pressed control's white on top.
-        let share = |weight: f64, pressed: bool| {
+        // a control's circle on top.
+        let share = |weight: f64, on_control: bool| {
             darkened.map(|component| {
-                let component = if pressed {
-                    under_pressed_control(component)
+                let component = if on_control {
+                    under_control(component)
                 } else {
                     srgb_to_linear(f64::from(component))
                 };
@@ -296,11 +297,11 @@ fn darken(backdrop: &mut Pixels<'_>, accent: [u8; 3]) {
             })
         };
         let plain = [0.2126, 0.7152, 0.0722].map(|weight| share(weight, false));
-        let pressed = [0.2126, 0.7152, 0.0722].map(|weight| share(weight, true));
+        let on_control = [0.2126, 0.7152, 0.0722].map(|weight| share(weight, true));
         pixels_of(backdrop).all(|[r, g, b]| {
             let (r, g, b) = (usize::from(r), usize::from(g), usize::from(b));
             plain[0][r] + plain[1][g] + plain[2][b] <= brightest_for_text
-                && pressed[0][r] + pressed[1][g] + pressed[2][b] <= brightest_pressed
+                && on_control[0][r] + on_control[1][g] + on_control[2][b] <= brightest_on_control
         })
     };
     if readable(1.0) {
@@ -331,12 +332,12 @@ fn darkening(factor: f64) -> [u8; 256] {
     })
 }
 
-/// The linear light of an sRGB component value under a pressed control:
-/// white at [`PRESSED_CONTROL_WHITE_ALPHA`] blended over it in sRGB values,
+/// The linear light of an sRGB component value under a control's circle:
+/// white at [`CONTROL_CIRCLE_WHITE_ALPHA`] blended over it in sRGB values,
 /// as the Device draws it, rounded up so the result is never darker than on
 /// the screen.
-fn under_pressed_control(component: u8) -> f64 {
-    let alpha = f64::from(PRESSED_CONTROL_WHITE_ALPHA) / 255.0;
+fn under_control(component: u8) -> f64 {
+    let alpha = f64::from(CONTROL_CIRCLE_WHITE_ALPHA) / 255.0;
     let blended = (255.0 * alpha + f64::from(component) * (1.0 - alpha)).ceil();
     srgb_to_linear(blended)
 }

@@ -18,11 +18,12 @@ pub const SCREEN_HEIGHT: u32 = 480;
 /// rescales it.
 pub const ARTWORK_BOX: u32 = 352;
 
-/// How opaque the white is that the Device app lays over a control's circle
-/// while it is pressed, 0 to 255 (`#ffffff40`). The control icons take the
+/// How opaque the white is that the Device app lays over the Backdrop for a
+/// control's circle, 0 to 255 (`#ffffff1a`). The control icons take the
 /// Accent, so the Accent needs its contrast on the Backdrop with this white
-/// on top. The circle is fainter while not pressed.
-pub const PRESSED_CONTROL_WHITE_ALPHA: u8 = 0x40;
+/// on top. Pressing a control only shrinks its circle and never changes its
+/// color, so this is the only surface the icons are drawn on.
+pub const CONTROL_CIRCLE_WHITE_ALPHA: u8 = 0x1a;
 
 /// The most bytes QOI takes for an RGB image of `width` by `height`: the
 /// header, at worst four bytes a pixel, and the end marker.
