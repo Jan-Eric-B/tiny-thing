@@ -1,7 +1,7 @@
 //! The Tray shell: a Tauri app with an icon in the notification area and no
 //! window (so no taskbar entry either).
 
-use crate::forwarding::{Stopped, forward_now_playing};
+use crate::forwarding::{Stopped, forward_to_device};
 use std::net::SocketAddr;
 use std::time::Duration;
 use tauri::async_runtime::{self, JoinHandle};
@@ -17,7 +17,7 @@ const TOOLTIP: &str = "TinyThing";
 const STOP_TIMEOUT: Duration = Duration::from_secs(2);
 
 /// Runs the Tray app until Quit is chosen from the tray icon's menu, then
-/// stops forwarding Now Playing and returns the exit code Tauri reports.
+/// stops forwarding to the Device and returns the exit code Tauri reports.
 ///
 /// When forwarding stops before that, the tray icon's tooltip says why: the
 /// Tray app has no window, and a release build no console.
@@ -25,7 +25,7 @@ pub fn run(device: SocketAddr) -> tauri::Result<i32> {
     let app = tauri::Builder::default().build(tauri::generate_context!())?;
     let tray_icon = add_tray_icon(&app)?;
     let (quit, quit_requested) = oneshot::channel::<()>();
-    let forwarding = async_runtime::spawn(forward_now_playing(device, quit_requested));
+    let forwarding = async_runtime::spawn(forward_to_device(device, quit_requested));
     let shown = async_runtime::spawn(show_when_stopped(forwarding, tray_icon));
 
     let exit_code = app.run_return(|_, _| {});
@@ -65,11 +65,11 @@ async fn show_when_stopped(forwarding: JoinHandle<Result<(), Stopped>>, tray_ico
     let reason = match forwarding.await {
         Ok(Ok(())) => return,
         Ok(Err(stopped)) => {
-            tracing::error!(error = %stopped, "forwarding Now Playing stopped");
+            tracing::error!(error = %stopped, "forwarding to the Device stopped");
             stopped.reason()
         }
         Err(error) => {
-            tracing::error!(%error, "forwarding Now Playing failed");
+            tracing::error!(%error, "forwarding to the Device failed");
             "stopped after an internal error"
         }
     };

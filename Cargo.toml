@@ -31,6 +31,9 @@ tracing-subscriber = { version = "0.3.23", features = ["env-filter"] }
 windows = "0.62.2"
 # The version `windows` uses: its async types are `windows-future` types.
 windows-future = "0.3.2"
+# The version `windows` uses: its `#[implement]` macro expands to
+# `windows_core` paths.
+windows-core = "0.62.2"
 
 [workspace.lints.rust]
 unsafe_code = "deny"

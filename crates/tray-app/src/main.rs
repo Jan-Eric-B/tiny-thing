@@ -8,9 +8,13 @@
 #[cfg(windows)]
 mod forwarding;
 #[cfg(windows)]
+mod retry;
+#[cfg(windows)]
 mod shell;
 #[cfg(windows)]
 mod windows_media;
+#[cfg(windows)]
+mod windows_volume;
 
 use std::process::ExitCode;
 

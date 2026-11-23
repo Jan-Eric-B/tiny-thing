@@ -1,14 +1,14 @@
 //! The connection to the Tray app.
 
-use crate::{DEVICE_DAEMON_VERSION, newest_connection};
+use crate::{DEVICE_DAEMON_VERSION, State, newest_connection};
 use protocol::{
     DeviceMessage, FrameError, Handshake, HandshakeError, InputAction, MessageReader,
-    MessageWriter, NowPlaying, TrayMessage,
+    MessageWriter, TrayMessage,
 };
 use tokio::net::tcp::{OwnedReadHalf, OwnedWriteHalf};
 use tokio::net::{TcpListener, TcpStream};
+use tokio::sync::broadcast;
 use tokio::sync::broadcast::error::RecvError;
-use tokio::sync::{broadcast, watch};
 
 #[derive(Debug, thiserror::Error)]
 enum TrayLinkError {
@@ -19,23 +19,24 @@ enum TrayLinkError {
 }
 
 /// Serves the Tray app for as long as it runs; the newest connection wins.
-/// Input actions sent to `inputs` go to the Tray app.
+/// What the Tray app reports goes to `state`; input actions sent to `inputs`
+/// go to the Tray app.
 pub(crate) async fn serve(
     listener: TcpListener,
-    now_playing: watch::Sender<Option<NowPlaying>>,
+    state: State,
     inputs: broadcast::Sender<InputAction>,
 ) {
     newest_connection::serve(listener, "Tray app", |stream| {
         // Subscribed on accept, so input actions count from the moment the
         // Tray app connects; earlier ones are not replayed.
-        handle(stream, now_playing.clone(), inputs.subscribe())
+        handle(stream, state.clone(), inputs.subscribe())
     })
     .await;
 }
 
 async fn handle(
     stream: TcpStream,
-    now_playing: watch::Sender<Option<NowPlaying>>,
+    state: State,
     inputs: broadcast::Receiver<InputAction>,
 ) -> Result<(), TrayLinkError> {
     let (read, write) = stream.into_split();
@@ -48,7 +49,7 @@ async fn handle(
 
     tokio::select! {
         result = send_to_tray(&mut writer, inputs) => result,
-        result = receive_from_tray(&mut reader, &now_playing) => result,
+        result = receive_from_tray(&mut reader, &state) => result,
     }
 }
 
@@ -76,12 +77,15 @@ async fn send_to_tray(
 
 async fn receive_from_tray(
     reader: &mut MessageReader<OwnedReadHalf, TrayMessage>,
-    now_playing: &watch::Sender<Option<NowPlaying>>,
+    state: &State,
 ) -> Result<(), TrayLinkError> {
     while let Some(message) = reader.recv().await? {
         match message {
             TrayMessage::NowPlaying(current) => {
-                now_playing.send_replace(current);
+                state.now_playing.send_replace(current);
+            }
+            TrayMessage::Volume(current) => {
+                state.volume.send_replace(current);
             }
         }
     }

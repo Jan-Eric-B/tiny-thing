@@ -9,6 +9,7 @@ mod support;
 use protocol::local::DaemonMessage;
 use support::{PATIENCE, RecordingDeviceApp, start_device_daemon};
 use tray_core::media::{FakeMediaSource, NowPlaying, PlaybackState};
+use tray_core::volume::FakeVolumeControl;
 use tray_core::{Session, SessionError};
 
 fn teardrop() -> NowPlaying {
@@ -30,7 +31,8 @@ async fn the_session_reports_the_device_gone_when_the_device_daemon_stops() {
     let media = FakeMediaSource::new();
     media.set(Some(teardrop()));
     let session = Session::connect(daemon.tray_address).await.unwrap();
-    let running = tokio::spawn(async move { session.run(&media).await });
+    let running =
+        tokio::spawn(async move { session.run(&media, &FakeVolumeControl::default()).await });
     device_app.wait_for(&teardrop_shown()).await;
 
     drop(daemon);
@@ -53,7 +55,11 @@ async fn the_session_ends_cleanly_when_the_media_source_stops() {
     media.set(Some(teardrop()));
     let session = Session::connect(daemon.tray_address).await.unwrap();
     let media_for_session = media.clone();
-    let running = tokio::spawn(async move { session.run(&media_for_session).await });
+    let running = tokio::spawn(async move {
+        session
+            .run(&media_for_session, &FakeVolumeControl::default())
+            .await
+    });
     device_app.wait_for(&teardrop_shown()).await;
 
     media.stop();

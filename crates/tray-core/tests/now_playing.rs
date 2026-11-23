@@ -10,6 +10,7 @@ use protocol::local::DaemonMessage;
 use support::{RecordingDeviceApp, start_device_daemon};
 use tray_core::Session;
 use tray_core::media::{FakeMediaSource, NowPlaying, PlaybackState};
+use tray_core::volume::FakeVolumeControl;
 
 fn song(title: &str, artist: &str) -> NowPlaying {
     NowPlaying {
@@ -35,7 +36,7 @@ async fn title_and_artist_reach_the_device_app() {
     media.set(Some(song("Teardrop", "Massive Attack")));
 
     let session = Session::connect(daemon.tray_address).await.unwrap();
-    tokio::spawn(async move { session.run(&media).await });
+    tokio::spawn(async move { session.run(&media, &FakeVolumeControl::default()).await });
 
     device_app
         .wait_for(&shown("Teardrop", "Massive Attack"))
@@ -50,7 +51,11 @@ async fn a_song_change_reaches_the_device_app() {
     media.set(Some(song("Teardrop", "Massive Attack")));
     let session = Session::connect(daemon.tray_address).await.unwrap();
     let media_for_session = media.clone();
-    tokio::spawn(async move { session.run(&media_for_session).await });
+    tokio::spawn(async move {
+        session
+            .run(&media_for_session, &FakeVolumeControl::default())
+            .await
+    });
     device_app
         .wait_for(&shown("Teardrop", "Massive Attack"))
         .await;
@@ -69,7 +74,11 @@ async fn a_device_app_that_starts_late_still_gets_what_is_playing() {
     media.set(Some(song("Teardrop", "Massive Attack")));
     let session = Session::connect(daemon.tray_address).await.unwrap();
     let media_for_session = media.clone();
-    tokio::spawn(async move { session.run(&media_for_session).await });
+    tokio::spawn(async move {
+        session
+            .run(&media_for_session, &FakeVolumeControl::default())
+            .await
+    });
 
     // Give the Now Playing time to reach the Device daemon before the Device
     // app exists, then check that the Device app still learns about it.
@@ -93,7 +102,11 @@ async fn pausing_and_playing_reach_the_device_app() {
     media.set(Some(song("Teardrop", "Massive Attack")));
     let session = Session::connect(daemon.tray_address).await.unwrap();
     let media_for_session = media.clone();
-    tokio::spawn(async move { session.run(&media_for_session).await });
+    tokio::spawn(async move {
+        session
+            .run(&media_for_session, &FakeVolumeControl::default())
+            .await
+    });
     device_app
         .wait_for(&shown("Teardrop", "Massive Attack"))
         .await;

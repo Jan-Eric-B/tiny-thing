@@ -15,12 +15,11 @@
 mod call;
 mod controls;
 mod now_playing;
-mod retry;
 mod subscription;
 
+use crate::retry::retry_delay;
 use call::CallError;
 use now_playing::MediaProperties;
-use retry::retry_delay;
 use std::sync::Arc;
 use std::time::Duration;
 use subscription::{Subscription, wake};

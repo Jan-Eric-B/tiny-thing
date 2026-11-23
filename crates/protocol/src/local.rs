@@ -3,7 +3,7 @@
 //! They use the same framing as the connection to the Tray app, but no
 //! Handshake: both programs run on the same Device.
 
-use crate::{InputAction, NowPlaying};
+use crate::{InputAction, NowPlaying, Volume};
 use serde::{Deserialize, Serialize};
 
 /// A message from the Device daemon to the Device app.
@@ -11,6 +11,9 @@ use serde::{Deserialize, Serialize};
 pub enum DaemonMessage {
     /// The current Now Playing; `None` when nothing plays.
     NowPlaying(Option<NowPlaying>),
+    /// The computer's current Volume; `None` when it has no output device
+    /// or no Tray app has reported it yet.
+    Volume(Option<Volume>),
 }
 
 /// A message from the Device app to the Device daemon.

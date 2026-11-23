@@ -15,6 +15,7 @@ use support::{PATIENCE, RecordingDeviceApp, start_device_daemon};
 use tokio::net::TcpStream;
 use tray_core::Session;
 use tray_core::media::{FakeMediaSource, NowPlaying, PlaybackState};
+use tray_core::volume::FakeVolumeControl;
 
 fn teardrop() -> NowPlaying {
     NowPlaying {
@@ -52,7 +53,7 @@ async fn a_silent_old_tray_app_connection_does_not_block_a_new_session() {
         .await
         .expect("the Handshake hangs behind the old connection")
         .unwrap();
-    tokio::spawn(async move { session.run(&media).await });
+    tokio::spawn(async move { session.run(&media, &FakeVolumeControl::default()).await });
 
     device_app.wait_for(&teardrop_shown()).await;
     // The new session replaced the old connection, so the daemon closed it.
@@ -72,7 +73,7 @@ async fn a_silent_old_device_app_connection_does_not_block_a_new_device_app() {
     let media = FakeMediaSource::new();
     media.set(Some(teardrop()));
     let session = Session::connect(daemon.tray_address).await.unwrap();
-    tokio::spawn(async move { session.run(&media).await });
+    tokio::spawn(async move { session.run(&media, &FakeVolumeControl::default()).await });
 
     let mut new_app = RecordingDeviceApp::connect(daemon.app_address).await;
     new_app.wait_for(&teardrop_shown()).await;

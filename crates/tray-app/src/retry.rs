@@ -1,14 +1,15 @@
-//! When to read the current Media session again after failed reads. Pure, so
-//! the schedule is tested without Windows.
+//! When to try again after failures in a row, for the Windows adapters that
+//! follow something (Now Playing, the Volume). Pure, so the schedule is
+//! tested without Windows.
 
 use std::time::Duration;
 
-/// How long to wait before reading again, given how many reads in a row have
-/// failed; `None` after a successful read (`failures == 0`), when only a
-/// change event triggers the next read.
+/// How long to wait before trying again, given how many tries in a row have
+/// failed; `None` after a success (`failures == 0`), when only a change
+/// event triggers the next try.
 ///
 /// The delay grows from half a second and holds at five seconds while the
-/// failures continue, so a stuck session costs little.
+/// failures continue, so something stuck costs little.
 pub fn retry_delay(failures: u32) -> Option<Duration> {
     let millis = match failures {
         0 => return None,
@@ -29,7 +30,7 @@ mod tests {
     }
 
     #[test]
-    fn after_a_successful_read_only_change_events_trigger_a_read() {
+    fn after_a_success_only_change_events_trigger_a_try() {
         assert_eq!(retry_delay(0), None);
     }
 

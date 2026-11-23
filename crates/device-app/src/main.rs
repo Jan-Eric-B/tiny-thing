@@ -17,8 +17,10 @@ const ACTION_QUEUE: usize = 32;
 ///
 /// In the Simulator, keys stand in for the Device's dial and buttons:
 /// Enter is the dial press (play/pause), 1 is button 1 (previous song),
-/// 2 is button 2 (play/pause) and 3 is button 3 (next song). The on-screen
-/// controls work with the mouse.
+/// 2 is button 2 (play/pause) and 3 is button 3 (next song). The right and
+/// left arrow keys turn the dial clockwise and counter-clockwise (Volume up
+/// and down), and so does the mouse wheel. The on-screen controls work with
+/// the mouse.
 #[derive(Debug, Parser)]
 #[command(version)]
 struct Args {

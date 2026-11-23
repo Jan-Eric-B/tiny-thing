@@ -71,16 +71,6 @@ pub trait MediaSource: Send + Sync {
     ) -> impl Future<Output = Result<(), ControlError>> + Send;
 }
 
-impl From<protocol::InputAction> for TransportControl {
-    fn from(action: protocol::InputAction) -> Self {
-        match action {
-            protocol::InputAction::PlayPause => Self::TogglePlayPause,
-            protocol::InputAction::Previous => Self::Previous,
-            protocol::InputAction::Next => Self::Next,
-        }
-    }
-}
-
 impl From<PlaybackState> for protocol::PlaybackState {
     fn from(playback: PlaybackState) -> Self {
         match playback {

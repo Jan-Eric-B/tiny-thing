@@ -10,7 +10,8 @@ pub struct ProtocolVersion(pub u16);
 /// The protocol version this build speaks.
 ///
 /// 2: Now Playing carries the playback state; the Device sends input actions.
-pub const PROTOCOL_VERSION: ProtocolVersion = ProtocolVersion(2);
+/// 3: the Tray app sends the Volume; the Device sends Volume steps.
+pub const PROTOCOL_VERSION: ProtocolVersion = ProtocolVersion(3);
 
 impl fmt::Display for ProtocolVersion {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {

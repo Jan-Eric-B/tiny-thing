@@ -5,11 +5,12 @@
 #![allow(clippy::unwrap_used)]
 
 use device_app::AppWindow;
-use device_app::screen::{OPTIMISTIC_HOLD, Screen};
+use device_app::screen::{OPTIMISTIC_HOLD, Screen, VOLUME_INDICATOR_HOLD};
 use i_slint_backend_testing::ElementHandle;
 use protocol::local::DaemonMessage;
-use protocol::{InputAction, NowPlaying, PlaybackState};
+use protocol::{InputAction, NowPlaying, Percent, PlaybackState, Volume};
 use slint::ComponentHandle;
+use slint::LogicalPosition;
 use slint::platform::{Key, PointerEventButton, WindowEvent};
 use std::cell::RefCell;
 use std::rc::Rc;
@@ -60,6 +61,30 @@ impl Harness {
         ElementHandle::find_by_accessible_label(&self.window, label)
             .next()
             .is_some()
+    }
+
+    /// The level the Volume indicator shows, `None` while it is hidden.
+    fn volume_indicator(&self) -> Option<String> {
+        ElementHandle::find_by_accessible_label(&self.window, "Volume")
+            .next()
+            .map(|indicator| indicator.accessible_value().unwrap_or_default().to_string())
+    }
+
+    fn scroll(&self, delta_y: f32) {
+        self.window
+            .window()
+            .dispatch_event(WindowEvent::PointerScrolled {
+                position: LogicalPosition::new(400.0, 240.0),
+                delta_x: 0.0,
+                delta_y,
+            });
+    }
+
+    fn report_volume(&self, level: u8, muted: bool) {
+        self.screen.show(DaemonMessage::Volume(Some(Volume {
+            level: Percent::try_from(level).unwrap(),
+            muted,
+        })));
     }
 
     fn report(&self, playback: PlaybackState) {
@@ -237,4 +262,135 @@ fn each_toggle_waits_the_full_hold_again() {
         harness.shows("Play"),
         "the second toggle's hold is still running"
     );
+}
+
+#[test]
+fn turning_the_dial_sends_volume_steps() {
+    let harness = Harness::new();
+    harness.report(PlaybackState::Playing);
+
+    // The Simulator's stand-ins: the right and left arrow keys turn the dial
+    // clockwise and counter-clockwise, and so does the mouse wheel.
+    harness.press_key(Key::RightArrow);
+    harness.press_key(Key::LeftArrow);
+    harness.scroll(120.0);
+    harness.scroll(-120.0);
+
+    assert_eq!(
+        harness.sent(),
+        [
+            InputAction::VolumeUp,
+            InputAction::VolumeDown,
+            InputAction::VolumeUp,
+            InputAction::VolumeDown,
+        ]
+    );
+}
+
+#[test]
+fn holding_a_dial_key_keeps_turning() {
+    let harness = Harness::new();
+    let window = harness.window.window();
+
+    window.dispatch_event(WindowEvent::KeyPressed {
+        text: Key::RightArrow.into(),
+    });
+    window.dispatch_event(WindowEvent::KeyPressRepeated {
+        text: Key::RightArrow.into(),
+    });
+    window.dispatch_event(WindowEvent::KeyReleased {
+        text: Key::RightArrow.into(),
+    });
+
+    assert_eq!(
+        harness.sent(),
+        [InputAction::VolumeUp, InputAction::VolumeUp]
+    );
+}
+
+#[test]
+fn turning_the_dial_shows_the_volume_indicator_until_it_rests() {
+    let harness = Harness::new();
+    harness.report_volume(40, false);
+    assert_eq!(harness.volume_indicator(), None, "hidden at first");
+
+    harness.press_key(Key::RightArrow);
+    assert_eq!(harness.volume_indicator().as_deref(), Some("40"));
+    // The Tray app reports the new level.
+    harness.report_volume(42, false);
+    assert_eq!(harness.volume_indicator().as_deref(), Some("42"));
+
+    i_slint_backend_testing::mock_elapsed_time(VOLUME_INDICATOR_HOLD - Duration::from_millis(100));
+    assert!(harness.volume_indicator().is_some(), "still turning");
+    i_slint_backend_testing::mock_elapsed_time(Duration::from_millis(200));
+    assert_eq!(harness.volume_indicator(), None, "hidden again");
+}
+
+#[test]
+fn each_dial_turn_keeps_the_volume_indicator_up_for_the_full_hold_again() {
+    let harness = Harness::new();
+    harness.report_volume(40, false);
+
+    harness.press_key(Key::RightArrow);
+    i_slint_backend_testing::mock_elapsed_time(VOLUME_INDICATOR_HOLD - Duration::from_millis(100));
+    harness.press_key(Key::RightArrow);
+    i_slint_backend_testing::mock_elapsed_time(Duration::from_millis(200));
+
+    assert!(
+        harness.volume_indicator().is_some(),
+        "the second turn's hold is still running"
+    );
+}
+
+#[test]
+fn a_volume_change_on_the_computer_shows_the_volume_indicator_briefly() {
+    let harness = Harness::new();
+    harness.report_volume(40, false);
+    // The same Volume again (a new Tray app session, say) is no change.
+    harness.report_volume(40, false);
+    assert_eq!(harness.volume_indicator(), None);
+
+    harness.report_volume(30, false);
+    assert_eq!(harness.volume_indicator().as_deref(), Some("30"));
+
+    i_slint_backend_testing::mock_elapsed_time(VOLUME_INDICATOR_HOLD + Duration::from_millis(100));
+    assert_eq!(harness.volume_indicator(), None);
+}
+
+#[test]
+fn turning_the_dial_without_a_known_volume_shows_no_indicator() {
+    let harness = Harness::new();
+    harness.screen.show(DaemonMessage::Volume(None));
+
+    harness.press_key(Key::RightArrow);
+
+    assert_eq!(harness.volume_indicator(), None);
+    assert_eq!(harness.sent(), [InputAction::VolumeUp], "still sent");
+}
+
+#[test]
+fn muted_shows_for_as_long_as_the_computer_is_muted() {
+    let harness = Harness::new();
+    harness.report_volume(40, false);
+    assert!(!harness.shows("Muted"));
+
+    harness.report_volume(40, true);
+    assert!(harness.shows("Muted"));
+    i_slint_backend_testing::mock_elapsed_time(VOLUME_INDICATOR_HOLD + Duration::from_millis(100));
+    assert!(harness.shows("Muted"), "after the Volume indicator is gone");
+
+    harness.report_volume(40, false);
+    assert!(!harness.shows("Muted"));
+}
+
+#[test]
+fn losing_the_output_device_hides_the_volume() {
+    let harness = Harness::new();
+    harness.report_volume(40, true);
+    harness.press_key(Key::RightArrow);
+
+    harness.screen.show(DaemonMessage::Volume(None));
+
+    assert_eq!(harness.volume_indicator(), None);
+    assert!(!harness.shows("Muted"));
 }

@@ -10,7 +10,7 @@ mod app_link;
 mod newest_connection;
 mod tray_link;
 
-use protocol::{InputAction, NowPlaying, SoftwareVersion};
+use protocol::{InputAction, NowPlaying, SoftwareVersion, Volume};
 use std::io;
 use std::net::SocketAddr;
 use tokio::net::TcpListener;
@@ -66,17 +66,44 @@ impl DeviceDaemon {
     /// failed connections are logged, and a new connection from either
     /// replaces the one before it.
     ///
-    /// Now Playing is kept and handed to every new Device app connection.
+    /// Now Playing and the Volume are kept and handed to every new Device app
+    /// connection.
     /// Input actions are not kept: one that arrives while no Tray app is
     /// connected is dropped, so a later connection does not replay stale
     /// presses.
     pub async fn run(self) {
-        let (now_playing, _) = watch::channel::<Option<NowPlaying>>(None);
-        let app_view = now_playing.subscribe();
+        let state = State {
+            now_playing: watch::Sender::new(None),
+            volume: watch::Sender::new(None),
+        };
+        let app_view = state.subscribe();
         let (inputs, _) = broadcast::channel::<InputAction>(INPUT_QUEUE);
         tokio::join!(
-            tray_link::serve(self.tray_listener, now_playing, inputs.clone()),
+            tray_link::serve(self.tray_listener, state, inputs.clone()),
             app_link::serve(self.app_listener, app_view, inputs),
         );
+    }
+}
+
+/// The latest state the Tray app reported, kept for the Device app.
+#[derive(Debug, Clone)]
+struct State {
+    now_playing: watch::Sender<Option<NowPlaying>>,
+    volume: watch::Sender<Option<Volume>>,
+}
+
+/// A view of [`State`] that follows its changes.
+#[derive(Debug, Clone)]
+struct StateView {
+    now_playing: watch::Receiver<Option<NowPlaying>>,
+    volume: watch::Receiver<Option<Volume>>,
+}
+
+impl State {
+    fn subscribe(&self) -> StateView {
+        StateView {
+            now_playing: self.now_playing.subscribe(),
+            volume: self.volume.subscribe(),
+        }
     }
 }

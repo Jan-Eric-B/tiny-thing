@@ -1,11 +1,12 @@
 //! The Tray core: all logic of the Tray app, with no UI and no platform code.
 //!
 //! The operating system reaches the Tray core only through the interfaces in
-//! [`media`]; the Device is reached through a [`Session`] with the Device
+//! [`media`] and [`volume`]; the Device is reached through a [`Session`] with the Device
 //! daemon (ADR-0003: the Device listens, the Tray app connects).
 
 pub mod media;
 mod session;
+pub mod volume;
 
 pub use session::{ConnectError, Session, SessionError};
 

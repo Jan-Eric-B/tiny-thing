@@ -1,3 +1,4 @@
+use crate::Percent;
 use serde::{Deserialize, Serialize};
 
 /// What the operating system reports as Now Playing, as far as the Device
@@ -28,6 +29,21 @@ pub enum InputAction {
     Previous,
     /// Go to the next song.
     Next,
+    /// Turn the Volume up by one step (one click of the dial clockwise).
+    /// The Tray app decides how large a step is.
+    VolumeUp,
+    /// Turn the Volume down by one step (one click of the dial
+    /// counter-clockwise).
+    VolumeDown,
+}
+
+/// The computer's Volume.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+pub struct Volume {
+    /// The level.
+    pub level: Percent,
+    /// Whether the computer is muted. The level stays what it was.
+    pub muted: bool,
 }
 
 /// A message from the Tray app to the Device daemon, after the Handshake.
@@ -35,6 +51,8 @@ pub enum InputAction {
 pub enum TrayMessage {
     /// The current Now Playing; `None` when nothing plays.
     NowPlaying(Option<NowPlaying>),
+    /// The current Volume; `None` when the computer has no output device.
+    Volume(Option<Volume>),
 }
 
 /// A message from the Device daemon to the Tray app, after the Handshake.

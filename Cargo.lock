@@ -7183,6 +7183,7 @@ dependencies = [
  "tracing-subscriber",
  "tray-core",
  "windows",
+ "windows-core",
  "windows-future",
 ]
 

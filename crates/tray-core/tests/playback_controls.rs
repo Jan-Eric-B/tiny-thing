@@ -12,6 +12,7 @@ use std::time::Duration;
 use support::{PATIENCE, RecordingDeviceApp, RunningDaemon, start_device_daemon};
 use tokio::task::JoinHandle;
 use tray_core::media::{FakeMediaSource, NowPlaying, PlaybackState, TransportControl};
+use tray_core::volume::FakeVolumeControl;
 use tray_core::{Session, SessionError};
 
 /// How long a test lets messages already sent settle where nothing tells
@@ -56,7 +57,11 @@ async fn start_session(
     media.set(Some(song(title)));
     let session = Session::connect(daemon.tray_address).await.unwrap();
     let media_for_session = media.clone();
-    let running = tokio::spawn(async move { session.run(&media_for_session).await });
+    let running = tokio::spawn(async move {
+        session
+            .run(&media_for_session, &FakeVolumeControl::default())
+            .await
+    });
     device_app.wait_for(&shown(title)).await;
     (media, running)
 }

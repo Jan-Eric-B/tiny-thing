@@ -2,7 +2,9 @@
 //
 // Physical input arrives as key events. In the Simulator the keyboard
 // stands in for the Device: Enter is the dial press, 1, 2 and 3 are buttons
-// 1 to 3. Which action an input stands for is decided in Rust (input.rs).
+// 1 to 3, and the right and left arrow keys (or the mouse wheel) turn the
+// dial clockwise and counter-clockwise. Which action an input stands for is
+// decided in Rust (input.rs).
 
 // A physical input on the Device.
 export enum DeviceInput {
@@ -10,6 +12,9 @@ export enum DeviceInput {
     button-1,
     button-2,
     button-3,
+    // One click of the dial.
+    dial-clockwise,
+    dial-counter-clockwise,
 }
 
 // An on-screen control.
@@ -25,6 +30,86 @@ global Icons {
     out property <string> play: "M 7 4 L 20 12 L 7 20 Z";
     out property <string> pause: "M 6 4 L 10 4 L 10 20 L 6 20 Z M 14 4 L 18 4 L 18 20 L 14 20 Z";
     out property <string> next: "M 4 4 L 15 12 L 4 20 Z M 16 4 L 19 4 L 19 20 L 16 20 Z";
+    // A speaker, filled; its sound waves and the cross for muted are lines.
+    out property <string> speaker: "M 2 9 L 6 9 L 11 4 L 11 20 L 6 15 L 2 15 Z";
+    out property <string> sound-waves: "M 14.5 8.5 A 5 5 0 0 1 14.5 15.5 M 17 5.5 A 9 9 0 0 1 17 18.5";
+    out property <string> muted-cross: "M 15 9 L 21 15 M 21 9 L 15 15";
+}
+
+// A speaker icon, with sound waves or, when muted, crossed out.
+component SpeakerIcon {
+    in property <bool> muted;
+
+    Path {
+        viewbox-width: 24;
+        viewbox-height: 24;
+        commands: Icons.speaker;
+        fill: #ffffff;
+    }
+
+    Path {
+        viewbox-width: 24;
+        viewbox-height: 24;
+        commands: root.muted ? Icons.muted-cross : Icons.sound-waves;
+        stroke: #ffffff;
+        stroke-width: 2px;
+    }
+}
+
+// The Volume level, shown briefly while it changes.
+component VolumeIndicator inherits Rectangle {
+    in property <int> level;
+    in property <bool> muted;
+
+    width: 440px;
+    height: 72px;
+    border-radius: self.height / 2;
+    background: #1a1a1ae6;
+
+    accessible-role: progress-indicator;
+    accessible-label: "Volume";
+    accessible-value: root.level;
+    accessible-value-minimum: 0;
+    accessible-value-maximum: 100;
+
+    HorizontalLayout {
+        padding-left: 24px;
+        padding-right: 28px;
+        spacing: 20px;
+
+        SpeakerIcon {
+            muted: root.muted;
+            width: 32px;
+        }
+
+        // The bar.
+        Rectangle {
+            horizontal-stretch: 1;
+
+            Rectangle {
+                y: (parent.height - self.height) / 2;
+                height: 8px;
+                border-radius: self.height / 2;
+                background: #ffffff40;
+
+                Rectangle {
+                    x: 0;
+                    width: parent.width * clamp(root.level, 0, 100) / 100;
+                    border-radius: parent.border-radius;
+                    background: root.muted ? #ffffff66 : #ffffff;
+                }
+            }
+        }
+
+        Text {
+            width: 56px;
+            text: root.level;
+            color: root.muted ? #ffffffa0 : #ffffff;
+            font-size: 28px;
+            horizontal-alignment: right;
+            vertical-alignment: center;
+        }
+    }
 }
 
 // A round control. Every control has the same touch target, however large
@@ -80,6 +165,11 @@ export component AppWindow inherits Window {
     // Whether the play/pause control shows the playing state (offering to
     // pause) rather than the paused state (offering to play).
     in property <bool> playing;
+    // Whether the Volume indicator shows, and what it shows.
+    in property <bool> volume-shown;
+    in property <int> volume-level;
+    // Whether the computer is muted; shown for as long as it is.
+    in property <bool> volume-muted;
 
     callback device-input(DeviceInput);
     callback touch-control(TouchControl);
@@ -92,6 +182,15 @@ export component AppWindow inherits Window {
 
     keys := FocusScope {
         key-pressed(event) => {
+            // A held-down dial key keeps turning the dial.
+            if (event.text == Key.RightArrow) {
+                root.device-input(DeviceInput.dial-clockwise);
+                return accept;
+            }
+            if (event.text == Key.LeftArrow) {
+                root.device-input(DeviceInput.dial-counter-clockwise);
+                return accept;
+            }
             // A held-down key or button acts once.
             if (event.repeat) {
                 return accept;
@@ -115,56 +214,109 @@ export component AppWindow inherits Window {
             reject
         }
 
-        VerticalLayout {
-            padding: 48px;
-            spacing: 12px;
-            alignment: center;
+        // In the Simulator the mouse wheel turns the dial: away from you is
+        // clockwise, one click per wheel notch. A precision touchpad or a
+        // smooth-scrolling mouse sends many small deltas per gesture, so they
+        // add up until they make a notch: 60px, what the winit backend makes
+        // of one wheel line. One scroll event turns the dial at most one click.
+        TouchArea {
+            // The scrolling that has not made a notch yet; positive is away
+            // from you.
+            property <length> scroll-pending: 0px;
+            property <length> scroll-notch: 60px;
 
-            Text {
-                text: root.now-playing-title;
-                color: #ffffff;
-                font-size: 44px;
-                font-weight: 700;
-                overflow: elide;
+            scroll-event(event) => {
+                if (event.delta-y == 0) {
+                    return reject;
+                }
+                // Turning back starts a new notch.
+                if ((event.delta-y > 0) != (self.scroll-pending > 0)) {
+                    self.scroll-pending = 0px;
+                }
+                self.scroll-pending += event.delta-y;
+                if (self.scroll-pending >= self.scroll-notch) {
+                    self.scroll-pending = 0px;
+                    root.device-input(DeviceInput.dial-clockwise);
+                }
+                if (self.scroll-pending <= -self.scroll-notch) {
+                    self.scroll-pending = 0px;
+                    root.device-input(DeviceInput.dial-counter-clockwise);
+                }
+                accept
             }
 
-            Text {
-                text: root.now-playing-artist;
-                color: #ffffff;
-                font-size: 30px;
-                overflow: elide;
-            }
-
-            if root.has-now-playing: HorizontalLayout {
-                padding-top: 24px;
-                spacing: 16px;
+            VerticalLayout {
+                padding: 48px;
+                spacing: 12px;
                 alignment: center;
 
-                ControlButton {
-                    label: "Previous";
-                    icon: Icons.previous;
-                    clicked => {
-                        root.touch-control(TouchControl.previous);
-                    }
+                Text {
+                    text: root.now-playing-title;
+                    color: #ffffff;
+                    font-size: 44px;
+                    font-weight: 700;
+                    overflow: elide;
                 }
 
-                ControlButton {
-                    label: root.playing ? "Pause" : "Play";
-                    icon: root.playing ? Icons.pause : Icons.play;
-                    size: 112px;
-                    clicked => {
-                        root.touch-control(TouchControl.play-pause);
-                    }
+                Text {
+                    text: root.now-playing-artist;
+                    color: #ffffff;
+                    font-size: 30px;
+                    overflow: elide;
                 }
 
-                ControlButton {
-                    label: "Next";
-                    icon: Icons.next;
-                    clicked => {
-                        root.touch-control(TouchControl.next);
+                if root.has-now-playing: HorizontalLayout {
+                    padding-top: 24px;
+                    spacing: 16px;
+                    alignment: center;
+
+                    ControlButton {
+                        label: "Previous";
+                        icon: Icons.previous;
+                        clicked => {
+                            root.touch-control(TouchControl.previous);
+                        }
+                    }
+
+                    ControlButton {
+                        label: root.playing ? "Pause" : "Play";
+                        icon: root.playing ? Icons.pause : Icons.play;
+                        size: 112px;
+                        clicked => {
+                            root.touch-control(TouchControl.play-pause);
+                        }
+                    }
+
+                    ControlButton {
+                        label: "Next";
+                        icon: Icons.next;
+                        clicked => {
+                            root.touch-control(TouchControl.next);
+                        }
                     }
                 }
             }
+        }
+
+        if root.volume-muted: Rectangle {
+            x: parent.width - self.width - 24px;
+            y: 24px;
+            width: 40px;
+            height: 40px;
+            accessible-role: image;
+            accessible-label: "Muted";
+
+            SpeakerIcon {
+                muted: true;
+                opacity: 0.8;
+            }
+        }
+
+        if root.volume-shown: VolumeIndicator {
+            x: (parent.width - self.width) / 2;
+            y: 24px;
+            level: root.volume-level;
+            muted: root.volume-muted;
         }
     }
 }

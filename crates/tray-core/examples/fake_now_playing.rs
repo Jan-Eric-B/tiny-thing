@@ -1,7 +1,9 @@
 //! Runs the Tray core with a fake `MediaSource` that reports one fixed Now
-//! Playing, for trying the Simulator without a media player. Input actions
-//! from the Device are logged but change nothing, so an optimistic play/pause
-//! on the Device falls back after a moment:
+//! Playing and a fake `VolumeControl`, for trying the Simulator without a
+//! media player and without touching the computer's Volume. Transport
+//! controls from the Device are logged but change nothing, so an optimistic
+//! play/pause on the Device falls back after a moment; Volume steps change the
+//! fake Volume, which the Device then shows:
 //!
 //! ```text
 //! cargo run -p device-daemon
@@ -14,6 +16,7 @@ use std::net::{Ipv4Addr, SocketAddr};
 use std::process::ExitCode;
 use tray_core::Session;
 use tray_core::media::{FakeMediaSource, NowPlaying, PlaybackState};
+use tray_core::volume::{FakeVolumeControl, Percent, Volume};
 
 #[derive(Debug, Parser)]
 struct Args {
@@ -32,6 +35,20 @@ struct Args {
     /// Report Now Playing as paused instead of playing.
     #[arg(long)]
     paused: bool,
+
+    /// Volume level to start at, in percent.
+    #[arg(long, default_value = "50", value_parser = percent)]
+    volume: Percent,
+
+    /// Report the Volume as muted.
+    #[arg(long)]
+    muted: bool,
+}
+
+/// Reads a level from 0 to 100.
+fn percent(argument: &str) -> Result<Percent, String> {
+    let value: u8 = argument.parse().map_err(|error| format!("{error}"))?;
+    Percent::try_from(value).map_err(|error| error.to_string())
 }
 
 #[tokio::main]
@@ -55,6 +72,11 @@ async fn main() -> ExitCode {
         },
     }));
 
+    let volume = FakeVolumeControl::new(Volume {
+        level: args.volume,
+        muted: args.muted,
+    });
+
     let session = match Session::connect(args.device).await {
         Ok(session) => session,
         Err(error) => {
@@ -64,7 +86,7 @@ async fn main() -> ExitCode {
     };
 
     tokio::select! {
-        result = session.run(&media) => match result {
+        result = session.run(&media, &volume) => match result {
             Ok(()) => ExitCode::SUCCESS,
             Err(error) => {
                 tracing::error!(%error, "session ended");

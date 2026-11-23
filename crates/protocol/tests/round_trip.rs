@@ -6,11 +6,16 @@
 use protocol::local::{AppMessage, DaemonMessage};
 use protocol::{
     DeviceMessage, Handshake, InputAction, MessageReader, MessageWriter, NowPlaying,
-    PROTOCOL_VERSION, PlaybackState, ProtocolVersion, SoftwareVersion, TrayMessage,
+    PROTOCOL_VERSION, Percent, PlaybackState, ProtocolVersion, SoftwareVersion, TrayMessage,
+    Volume,
 };
 use serde::Serialize;
 use serde::de::DeserializeOwned;
 use std::fmt::Debug;
+
+fn percent(value: u8) -> Percent {
+    Percent::try_from(value).unwrap()
+}
 
 fn now_playing(title: &str, artist: &str) -> NowPlaying {
     NowPlaying {
@@ -25,13 +30,19 @@ fn now_playing(title: &str, artist: &str) -> NowPlaying {
 fn all_input_actions() -> Vec<InputAction> {
     fn covered(action: InputAction) {
         match action {
-            InputAction::PlayPause | InputAction::Previous | InputAction::Next => {}
+            InputAction::PlayPause
+            | InputAction::Previous
+            | InputAction::Next
+            | InputAction::VolumeUp
+            | InputAction::VolumeDown => {}
         }
     }
     let actions = vec![
         InputAction::PlayPause,
         InputAction::Previous,
         InputAction::Next,
+        InputAction::VolumeUp,
+        InputAction::VolumeDown,
     ];
     actions.iter().copied().for_each(covered);
     actions
@@ -42,7 +53,7 @@ fn all_input_actions() -> Vec<InputAction> {
 fn tray_message_samples() -> Vec<TrayMessage> {
     fn covered(message: &TrayMessage) {
         match message {
-            TrayMessage::NowPlaying(_) => {}
+            TrayMessage::NowPlaying(_) | TrayMessage::Volume(_) => {}
         }
     }
     let samples = vec![
@@ -58,6 +69,15 @@ fn tray_message_samples() -> Vec<TrayMessage> {
             ..now_playing("Teardrop", "Massive Attack")
         })),
         TrayMessage::NowPlaying(None),
+        TrayMessage::Volume(Some(Volume {
+            level: percent(0),
+            muted: false,
+        })),
+        TrayMessage::Volume(Some(Volume {
+            level: percent(100),
+            muted: true,
+        })),
+        TrayMessage::Volume(None),
     ];
     samples.iter().for_each(covered);
     samples
@@ -80,7 +100,7 @@ fn device_message_samples() -> Vec<DeviceMessage> {
 fn daemon_message_samples() -> Vec<DaemonMessage> {
     fn covered(message: &DaemonMessage) {
         match message {
-            DaemonMessage::NowPlaying(_) => {}
+            DaemonMessage::NowPlaying(_) | DaemonMessage::Volume(_) => {}
         }
     }
     let samples = vec![
@@ -90,6 +110,11 @@ fn daemon_message_samples() -> Vec<DaemonMessage> {
             ..now_playing("Windowlicker", "Aphex Twin")
         })),
         DaemonMessage::NowPlaying(None),
+        DaemonMessage::Volume(Some(Volume {
+            level: percent(42),
+            muted: true,
+        })),
+        DaemonMessage::Volume(None),
     ];
     samples.iter().for_each(covered);
     samples
@@ -198,4 +223,45 @@ fn the_handshake_encoding_keeps_the_protocol_version_first() {
 #[test]
 fn software_version_displays_as_major_minor_patch() {
     assert_eq!(SoftwareVersion::new(0, 12, 345).to_string(), "0.12.345");
+}
+
+#[test]
+fn every_percent_survives_the_trip_through_postcard() {
+    for value in 0..=100 {
+        let level = percent(value);
+        let bytes = postcard::to_allocvec(&level).unwrap();
+        assert_eq!(postcard::from_bytes::<Percent>(&bytes).unwrap(), level);
+    }
+}
+
+#[test]
+fn a_percent_above_100_is_rejected() {
+    assert!(Percent::try_from(101).is_err());
+    assert!(Percent::try_from(u8::MAX).is_err());
+}
+
+#[test]
+fn a_volume_level_above_100_from_the_wire_is_rejected() {
+    /// `Volume` as a peer without the 0-100 check would encode it.
+    #[derive(Serialize)]
+    struct UncheckedVolume {
+        level: u8,
+        muted: bool,
+    }
+    let encode = |level| {
+        postcard::to_allocvec(&UncheckedVolume {
+            level,
+            muted: false,
+        })
+        .unwrap()
+    };
+
+    assert_eq!(
+        postcard::from_bytes::<Volume>(&encode(100)).unwrap(),
+        Volume {
+            level: percent(100),
+            muted: false,
+        },
+    );
+    assert!(postcard::from_bytes::<Volume>(&encode(101)).is_err());
 }
