@@ -1,0 +1,3 @@
+# The Device listens, the Tray app connects
+
+The Device daemon listens on its USB network interface only, and the Tray app opens the connection; DeskThing did it the other way round. This needs no inbound firewall rule on the computer and keeps all reconnect logic and its logs on the computer, where they can be observed. There is no pairing or password between the two: the USB cable is the access control, since anything able to reach the Device over it already runs code on the computer. What protects the Device instead is that release images have no SSH and Device updates install only when signed with the TinyThing release key.

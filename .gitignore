@@ -1,0 +1,22 @@
+# Rust
+/target/
+
+# Settings window (web)
+node_modules/
+/crates/tray/ui/dist/
+
+# Yocto / kas build output and caches
+/os/build/
+/os/sstate-cache/
+/os/downloads/
+
+# Signing keys never belong in the repo
+*.key
+*.pem
+*.sk
+
+# Editors and OS
+.vscode/
+.idea/
+.DS_Store
+Thumbs.db
