@@ -4,7 +4,7 @@
 
 **Blocked by:** None (can start immediately).
 
-**Status:** in-progress
+**Status:** done
 
 - [x] Cargo workspace with one kebab-case folder per crate (protocol, tray, device-daemon, device-app), GPLv3 license file
 - [x] `protocol`: length-prefixed postcard framing and a Handshake carrying protocol and software versions; every message round-trips losslessly (test)
@@ -12,7 +12,7 @@
 - [x] Seam 1 test: a protocol version mismatch in the Handshake is reported, not silently ignored
 - [x] Device daemon listens; Tray core connects (ADR-0003)
 - [x] Running the Tray core with a fake `MediaSource` plus the Simulator shows the title and artist on screen
-- [ ] CI (GitHub Actions) builds and runs all tests on Windows and Linux
+- [x] CI (GitHub Actions) builds and runs all tests on Windows and Linux
 - [x] CHANGELOG entry under Unreleased
 
 ## Comments
@@ -32,3 +32,5 @@
 **2026-11-23, review fixes.** Newest connection wins on both Device daemon listeners (one shared accept loop in `device-daemon/src/newest_connection.rs`), and the Handshake times out after `HANDSHAKE_TIMEOUT` (5 s) on both sides. Framing runs on tokio-util's `FramedRead`/`FramedWrite` with an own codec, so `recv` is cancel-safe, and the Handshake shares the message reader and writer. `SessionError::DeviceClosed` is now `DeviceGone` (also covers resets and broken pipes). `SoftwareVersion` is built from `CARGO_PKG_VERSION_MAJOR/MINOR/PATCH`. All links share one send-loop plus receive-loop shape.
 
 **2026-11-23, note from 02.** The `tray` crate was split in 02: the Tray core is now `crates/tray-core` (library `tray_core`, with the Seam 1 tests in `crates/tray-core/tests` and the example: `cargo run -p tray-core --example fake-now-playing -- ...`), and the Tray app binary is `crates/tray-app`. The bullets above name the old layout.
+
+**2026-11-23, CI and license.** CI ran green on both runners (Build and test on ubuntu-latest and windows-latest, plus Format) for the push of ticket 03. The license stays `GPL-3.0-only` (decided).
