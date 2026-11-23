@@ -14,8 +14,8 @@ use protocol::{
 use std::net::SocketAddr;
 use support::{PATIENCE, RecordingDeviceApp, start_device_daemon};
 use tokio::net::{TcpListener, TcpStream};
-use tray::media::{FakeMediaSource, NowPlaying};
-use tray::{ConnectError, Session};
+use tray_core::media::{FakeMediaSource, NowPlaying};
+use tray_core::{ConnectError, Session};
 
 fn other_protocol_version() -> ProtocolVersion {
     ProtocolVersion(PROTOCOL_VERSION.0 + 1)

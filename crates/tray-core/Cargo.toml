@@ -1,6 +1,6 @@
 [package]
-name = "tray"
-description = "The Tray app. Its library is the Tray core: all logic, no UI."
+name = "tray-core"
+description = "The Tray core: all logic of the Tray app, with no UI and no platform code."
 version.workspace = true
 edition.workspace = true
 license.workspace = true

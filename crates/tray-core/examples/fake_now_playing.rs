@@ -4,14 +4,14 @@
 //! ```text
 //! cargo run -p device-daemon
 //! cargo run -p device-app
-//! cargo run -p tray --example fake-now-playing -- --title "Teardrop" --artist "Massive Attack"
+//! cargo run -p tray-core --example fake-now-playing -- --title "Teardrop" --artist "Massive Attack"
 //! ```
 
 use clap::Parser;
 use std::net::{Ipv4Addr, SocketAddr};
 use std::process::ExitCode;
-use tray::Session;
-use tray::media::{FakeMediaSource, NowPlaying};
+use tray_core::Session;
+use tray_core::media::{FakeMediaSource, NowPlaying};
 
 #[derive(Debug, Parser)]
 struct Args {

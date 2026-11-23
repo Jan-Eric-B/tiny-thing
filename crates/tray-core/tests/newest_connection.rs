@@ -13,8 +13,8 @@ use protocol::{
 };
 use support::{PATIENCE, RecordingDeviceApp, start_device_daemon};
 use tokio::net::TcpStream;
-use tray::Session;
-use tray::media::{FakeMediaSource, NowPlaying};
+use tray_core::Session;
+use tray_core::media::{FakeMediaSource, NowPlaying};
 
 fn teardrop() -> NowPlaying {
     NowPlaying {

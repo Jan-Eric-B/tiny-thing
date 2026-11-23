@@ -8,8 +8,8 @@ mod support;
 
 use protocol::local::DaemonMessage;
 use support::{PATIENCE, RecordingDeviceApp, start_device_daemon};
-use tray::media::{FakeMediaSource, NowPlaying};
-use tray::{Session, SessionError};
+use tray_core::media::{FakeMediaSource, NowPlaying};
+use tray_core::{Session, SessionError};
 
 fn teardrop() -> NowPlaying {
     NowPlaying {

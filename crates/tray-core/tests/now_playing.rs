@@ -8,8 +8,8 @@ mod support;
 
 use protocol::local::DaemonMessage;
 use support::{RecordingDeviceApp, start_device_daemon};
-use tray::Session;
-use tray::media::{FakeMediaSource, NowPlaying};
+use tray_core::Session;
+use tray_core::media::{FakeMediaSource, NowPlaying};
 
 fn song(title: &str, artist: &str) -> NowPlaying {
     NowPlaying {
