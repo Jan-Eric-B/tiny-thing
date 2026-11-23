@@ -8,11 +8,17 @@
 //! polls while reads succeed, so an idle Tray app does no work here. After a
 //! failed read the adapter also reads again on a timer ([`retry_delay`]), so
 //! a stale Now Playing does not wait for the next event.
+//!
+//! The transport controls go to whichever Media session is current when they
+//! are called ([`controls`]).
 
+mod call;
+mod controls;
 mod now_playing;
 mod retry;
 mod subscription;
 
+use call::CallError;
 use now_playing::MediaProperties;
 use retry::retry_delay;
 use std::sync::Arc;
@@ -20,7 +26,7 @@ use std::time::Duration;
 use subscription::{Subscription, wake};
 use tokio::sync::{Notify, watch};
 use tokio::task::JoinHandle;
-use tray_core::media::{MediaSource, NowPlaying};
+use tray_core::media::{ControlError, MediaSource, NowPlaying, TransportControl};
 use windows::Media::Control::{
     GlobalSystemMediaTransportControlsSession as WindowsSession,
     GlobalSystemMediaTransportControlsSessionManager as SessionManager,
@@ -36,17 +42,10 @@ const READ_TIMEOUT: Duration = Duration::from_secs(2);
 #[error("cannot follow the Windows media sessions: {0}")]
 pub struct StartError(#[from] windows::core::Error);
 
-/// Why Now Playing could not be read from the current Media session.
-#[derive(Debug, thiserror::Error)]
-enum ReadError {
-    #[error(transparent)]
-    Windows(#[from] windows::core::Error),
-    #[error("Windows did not answer within {READ_TIMEOUT:?}")]
-    TimedOut,
-}
-
-/// Now Playing of the Media session Windows marks as current.
+/// Now Playing of the Media session Windows marks as current, and its
+/// transport controls.
 pub struct WindowsMediaSource {
+    manager: SessionManager,
     now_playing: watch::Receiver<Option<NowPlaying>>,
     follower: JoinHandle<()>,
 }
@@ -73,13 +72,14 @@ impl WindowsMediaSource {
         ];
         let (sender, now_playing) = watch::channel(None);
         let follower = Follower {
-            manager,
+            manager: manager.clone(),
             changed,
             _manager_events: manager_events,
             followed: None,
             now_playing: sender,
         };
         Ok(Self {
+            manager,
             now_playing,
             follower: tokio::spawn(follower.run()),
         })
@@ -105,6 +105,15 @@ impl Drop for WindowsMediaSource {
 impl MediaSource for WindowsMediaSource {
     fn now_playing(&self) -> watch::Receiver<Option<NowPlaying>> {
         self.now_playing.clone()
+    }
+
+    async fn control(&self, control: TransportControl) -> Result<(), ControlError> {
+        let command = match control {
+            TransportControl::TogglePlayPause => WindowsSession::TryTogglePlayPauseAsync,
+            TransportControl::Previous => WindowsSession::TrySkipPreviousAsync,
+            TransportControl::Next => WindowsSession::TrySkipNextAsync,
+        };
+        controls::send(&self.manager, command).await
     }
 }
 
@@ -149,7 +158,7 @@ impl Follower {
     /// Reads the current Media session and publishes its Now Playing if it
     /// differs from what was published last. On a failed read the last Now
     /// Playing stays until a read succeeds.
-    async fn refresh(&mut self) -> Result<(), ReadError> {
+    async fn refresh(&mut self) -> Result<(), CallError> {
         let current = current_session(&self.manager)?;
         self.follow(current.as_ref());
         let properties = match &current {
@@ -257,21 +266,12 @@ fn current_session(manager: &SessionManager) -> windows::core::Result<Option<Win
     }
 }
 
-async fn read_properties(session: &WindowsSession) -> Result<MediaProperties, ReadError> {
-    let read = session.TryGetMediaPropertiesAsync()?;
-    let properties = match tokio::time::timeout(READ_TIMEOUT, read.clone().into_future()).await {
-        Ok(properties) => properties?,
-        Err(_elapsed) => {
-            // Dropping the future leaves the read running in Windows.
-            if let Err(error) = read.Cancel() {
-                tracing::debug!(%error, "cannot cancel a timed-out read");
-            }
-            return Err(ReadError::TimedOut);
-        }
-    };
+async fn read_properties(session: &WindowsSession) -> Result<MediaProperties, CallError> {
+    let properties = call::finish(session.TryGetMediaPropertiesAsync()?, READ_TIMEOUT).await?;
     Ok(MediaProperties {
         title: properties.Title()?.to_string_lossy(),
         artist: properties.Artist()?.to_string_lossy(),
         album_artist: properties.AlbumArtist()?.to_string_lossy(),
+        playback_status: session.GetPlaybackInfo()?.PlaybackStatus()?,
     })
 }

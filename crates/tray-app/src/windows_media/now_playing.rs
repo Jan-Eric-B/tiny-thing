@@ -1,15 +1,17 @@
 //! Turns what Windows reports about the current Media session into Now
 //! Playing. Pure, so the rules are tested without Windows media players.
 
-use tray_core::media::NowPlaying;
+use tray_core::media::{NowPlaying, PlaybackState};
+use windows::Media::Control::GlobalSystemMediaTransportControlsSessionPlaybackStatus as PlaybackStatus;
 
-/// The text the current Media session reports about what it plays, as read
-/// from Windows.
+/// What the current Media session reports about what it plays, as read from
+/// Windows.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct MediaProperties {
     pub title: String,
     pub artist: String,
     pub album_artist: String,
+    pub playback_status: PlaybackStatus,
 }
 
 /// Now Playing for the Media session Windows marks as current, given its
@@ -31,7 +33,19 @@ pub fn now_playing(current: Option<MediaProperties>) -> Option<NowPlaying> {
     Some(NowPlaying {
         title: title.to_owned(),
         artist: artist.to_owned(),
+        playback: playback_state(properties.playback_status),
     })
+}
+
+/// Only a session that Windows reports as playing counts as playing. Every
+/// other status (paused, stopped, opened, closed, changing between songs)
+/// shows as paused, so the Device offers to play.
+fn playback_state(status: PlaybackStatus) -> PlaybackState {
+    if status == PlaybackStatus::Playing {
+        PlaybackState::Playing
+    } else {
+        PlaybackState::Paused
+    }
 }
 
 #[cfg(test)]
@@ -43,6 +57,7 @@ mod tests {
             title: title.to_owned(),
             artist: artist.to_owned(),
             album_artist: album_artist.to_owned(),
+            playback_status: PlaybackStatus::Playing,
         }
     }
 
@@ -50,7 +65,16 @@ mod tests {
         Some(NowPlaying {
             title: title.to_owned(),
             artist: artist.to_owned(),
+            playback: PlaybackState::Playing,
         })
+    }
+
+    fn playback_for(status: PlaybackStatus) -> Option<PlaybackState> {
+        let properties = MediaProperties {
+            playback_status: status,
+            ..properties("Teardrop", "Massive Attack", "")
+        };
+        now_playing(Some(properties)).map(|now_playing| now_playing.playback)
     }
 
     #[test]
@@ -104,5 +128,37 @@ mod tests {
             now_playing(Some(properties(" Teardrop\n", " Massive Attack ", ""))),
             song("Teardrop", "Massive Attack")
         );
+    }
+
+    #[test]
+    fn a_playing_session_is_playing() {
+        assert_eq!(
+            playback_for(PlaybackStatus::Playing),
+            Some(PlaybackState::Playing)
+        );
+    }
+
+    #[test]
+    fn a_paused_session_is_paused() {
+        assert_eq!(
+            playback_for(PlaybackStatus::Paused),
+            Some(PlaybackState::Paused)
+        );
+    }
+
+    #[test]
+    fn every_status_other_than_playing_shows_as_paused() {
+        for status in [
+            PlaybackStatus::Closed,
+            PlaybackStatus::Opened,
+            PlaybackStatus::Changing,
+            PlaybackStatus::Stopped,
+        ] {
+            assert_eq!(
+                playback_for(status),
+                Some(PlaybackState::Paused),
+                "{status:?}"
+            );
+        }
     }
 }

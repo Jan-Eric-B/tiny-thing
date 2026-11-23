@@ -20,6 +20,7 @@ tracing.workspace = true
 tracing-subscriber.workspace = true
 tray-core.workspace = true
 windows = { workspace = true, features = ["Media_Control"] }
+windows-future.workspace = true
 
 # Not gated: build scripts run on the host, which can differ from the target,
 # so build.rs asks Cargo for the target instead (no Tauri system libraries

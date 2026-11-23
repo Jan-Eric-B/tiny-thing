@@ -29,6 +29,8 @@ tokio-util = "0.7.20"
 tracing = "0.1.44"
 tracing-subscriber = { version = "0.3.23", features = ["env-filter"] }
 windows = "0.62.2"
+# The version `windows` uses: its async types are `windows-future` types.
+windows-future = "0.3.2"
 
 [workspace.lints.rust]
 unsafe_code = "deny"
