@@ -10,7 +10,7 @@ publish.workspace = true
 [dependencies]
 protocol.workspace = true
 thiserror.workspace = true
-tokio = { workspace = true, features = ["io-util", "macros", "net", "sync"] }
+tokio = { workspace = true, features = ["io-util", "macros", "net", "rt", "sync"] }
 tracing.workspace = true
 
 [dev-dependencies]

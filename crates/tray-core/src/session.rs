@@ -2,15 +2,20 @@
 //! Handshake until either side closes the connection.
 
 use crate::TRAY_APP_VERSION;
-use crate::media::{MediaSource, NowPlaying};
+use crate::media::{ControlError, MediaSource, NowPlaying, TransportControl};
 use protocol::{
-    DeviceMessage, FrameError, Handshake, HandshakeError, MessageReader, MessageWriter, TrayMessage,
+    DeviceMessage, FrameError, Handshake, HandshakeError, InputAction, MessageReader,
+    MessageWriter, TrayMessage,
 };
 use std::io;
 use std::net::SocketAddr;
 use tokio::net::TcpStream;
 use tokio::net::tcp::{OwnedReadHalf, OwnedWriteHalf};
-use tokio::sync::watch;
+use tokio::sync::{mpsc, watch};
+
+/// How many input actions from the Device may wait while a transport control
+/// runs. More would only replay stale presses once a slow player answers.
+const CONTROL_QUEUE: usize = 1;
 
 /// Why no session could be started.
 #[derive(Debug, thiserror::Error)]
@@ -94,27 +99,36 @@ impl Session {
         &self.device_handshake
     }
 
-    /// Forwards Now Playing from `media` to the Device until the session ends.
+    /// Forwards Now Playing from `media` to the Device and the Device's input
+    /// actions to `media`'s transport controls, until the session ends.
     ///
-    /// Subscribes to `media` at once, so the returned future does not borrow
-    /// it and can be spawned. Ends with `Ok(())` when `media` stops, and with
+    /// Ends with `Ok(())` when `media` stops, and with
     /// [`SessionError::DeviceGone`] when the connection to the Device daemon
-    /// is lost.
-    pub fn run(
-        self,
-        media: &dyn MediaSource,
-    ) -> impl Future<Output = Result<(), SessionError>> + Send + use<> {
-        let now_playing = media.now_playing();
+    /// is lost. A transport control that fails is logged and does not end the
+    /// session: the next Now Playing shows the Device what actually happened.
+    ///
+    /// Transport controls run one after the other, apart from reading the
+    /// Device, so a slow player does not hold up the Device's other messages.
+    /// While one runs, one more input action may wait; further ones are
+    /// dropped, since a press is meant for now, not for whenever the
+    /// player is done.
+    pub async fn run<M: MediaSource>(self, media: &M) -> Result<(), SessionError> {
         let Self {
             mut reader,
             mut writer,
             ..
         } = self;
-        async move {
-            tokio::select! {
-                result = send_to_device(&mut writer, now_playing) => result,
-                result = receive_from_device(&mut reader) => result,
-            }
+        let (controls, pending) = mpsc::channel(CONTROL_QUEUE);
+        tokio::select! {
+            // In this order on every poll, so `carry_out` takes an action
+            // handed over by `receive_from_device` before that reads on.
+            biased;
+            // `pending` closes only once `receive_from_device` has dropped
+            // its sender, which means it has ended, and that ends the session
+            // first.
+            () = carry_out(media, pending) => Err(SessionError::DeviceGone),
+            result = receive_from_device(&mut reader, controls) => result,
+            result = send_to_device(&mut writer, media.now_playing()) => result,
         }
     }
 }
@@ -138,17 +152,50 @@ async fn send_to_device(
     }
 }
 
-/// Handles what the Device daemon sends. That is nothing yet:
-/// `DeviceMessage` gains variants with the input actions.
-#[expect(
-    clippy::never_loop,
-    reason = "DeviceMessage has no variants yet; this loops once it has"
-)]
+/// Passes each input action from the Device on to [`carry_out`], dropping
+/// it when [`CONTROL_QUEUE`] actions are waiting already.
 async fn receive_from_device(
     reader: &mut MessageReader<OwnedReadHalf, DeviceMessage>,
+    controls: mpsc::Sender<InputAction>,
 ) -> Result<(), SessionError> {
     while let Some(message) = reader.recv().await? {
-        match message {}
+        match message {
+            DeviceMessage::Input(action) => {
+                tracing::debug!(?action, "input action from the Device");
+                if controls.try_send(action).is_err() {
+                    tracing::debug!(
+                        ?action,
+                        "the player is still busy with an earlier input action; dropped"
+                    );
+                }
+                // `carry_out` runs in this task: give it the chance (it is
+                // polled first) to take the action before the next message is
+                // read, so presses that arrive in one read count as one after
+                // the other, not as presses during a control still running.
+                tokio::task::yield_now().await;
+            }
+        }
     }
     Err(SessionError::DeviceGone)
+}
+
+/// Carries out the input actions in `pending` on `media`, one after the
+/// other, until `pending` closes.
+async fn carry_out<M: MediaSource>(media: &M, mut pending: mpsc::Receiver<InputAction>) {
+    while let Some(action) = pending.recv().await {
+        control(media, action).await;
+    }
+}
+
+async fn control<M: MediaSource>(media: &M, action: InputAction) {
+    match media.control(TransportControl::from(action)).await {
+        Ok(()) => {}
+        // Every press while nothing plays ends up here; nothing is wrong.
+        Err(error @ ControlError::NoMediaSession) => {
+            tracing::debug!(?action, %error, "input action from the Device not carried out");
+        }
+        Err(error) => {
+            tracing::warn!(?action, %error, "cannot carry out an input action from the Device");
+        }
+    }
 }

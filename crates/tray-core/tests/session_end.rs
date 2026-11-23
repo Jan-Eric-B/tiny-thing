@@ -8,13 +8,14 @@ mod support;
 
 use protocol::local::DaemonMessage;
 use support::{PATIENCE, RecordingDeviceApp, start_device_daemon};
-use tray_core::media::{FakeMediaSource, NowPlaying};
+use tray_core::media::{FakeMediaSource, NowPlaying, PlaybackState};
 use tray_core::{Session, SessionError};
 
 fn teardrop() -> NowPlaying {
     NowPlaying {
         title: "Teardrop".to_owned(),
         artist: "Massive Attack".to_owned(),
+        playback: PlaybackState::Playing,
     }
 }
 
@@ -29,7 +30,7 @@ async fn the_session_reports_the_device_gone_when_the_device_daemon_stops() {
     let media = FakeMediaSource::new();
     media.set(Some(teardrop()));
     let session = Session::connect(daemon.tray_address).await.unwrap();
-    let running = tokio::spawn(session.run(&media));
+    let running = tokio::spawn(async move { session.run(&media).await });
     device_app.wait_for(&teardrop_shown()).await;
 
     drop(daemon);
@@ -48,14 +49,14 @@ async fn the_session_reports_the_device_gone_when_the_device_daemon_stops() {
 async fn the_session_ends_cleanly_when_the_media_source_stops() {
     let daemon = start_device_daemon().await;
     let mut device_app = RecordingDeviceApp::connect(daemon.app_address).await;
-    // The only handle to the source; dropping it closes its channel.
     let media = FakeMediaSource::new();
     media.set(Some(teardrop()));
     let session = Session::connect(daemon.tray_address).await.unwrap();
-    let running = tokio::spawn(session.run(&media));
+    let media_for_session = media.clone();
+    let running = tokio::spawn(async move { session.run(&media_for_session).await });
     device_app.wait_for(&teardrop_shown()).await;
 
-    drop(media);
+    media.stop();
 
     let result = tokio::time::timeout(PATIENCE, running)
         .await

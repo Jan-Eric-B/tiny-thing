@@ -14,12 +14,13 @@ use protocol::{
 use support::{PATIENCE, RecordingDeviceApp, start_device_daemon};
 use tokio::net::TcpStream;
 use tray_core::Session;
-use tray_core::media::{FakeMediaSource, NowPlaying};
+use tray_core::media::{FakeMediaSource, NowPlaying, PlaybackState};
 
 fn teardrop() -> NowPlaying {
     NowPlaying {
         title: "Teardrop".to_owned(),
         artist: "Massive Attack".to_owned(),
+        playback: PlaybackState::Playing,
     }
 }
 

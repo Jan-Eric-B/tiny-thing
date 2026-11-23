@@ -14,7 +14,7 @@ use protocol::{
 use std::net::SocketAddr;
 use support::{PATIENCE, RecordingDeviceApp, start_device_daemon};
 use tokio::net::{TcpListener, TcpStream};
-use tray_core::media::{FakeMediaSource, NowPlaying};
+use tray_core::media::{FakeMediaSource, NowPlaying, PlaybackState};
 use tray_core::{ConnectError, Session};
 
 fn other_protocol_version() -> ProtocolVersion {
@@ -131,6 +131,7 @@ async fn the_device_daemon_refuses_a_tray_app_speaking_another_protocol_version(
     media.set(Some(NowPlaying {
         title: "Teardrop".to_owned(),
         artist: "Massive Attack".to_owned(),
+        playback: PlaybackState::Playing,
     }));
     let session = Session::connect(daemon.tray_address).await.unwrap();
     tokio::spawn(async move { session.run(&media).await });
@@ -138,6 +139,7 @@ async fn the_device_daemon_refuses_a_tray_app_speaking_another_protocol_version(
         .wait_for(&DaemonMessage::NowPlaying(Some(protocol::NowPlaying {
             title: "Teardrop".to_owned(),
             artist: "Massive Attack".to_owned(),
+            playback: protocol::PlaybackState::Playing,
         })))
         .await;
 }

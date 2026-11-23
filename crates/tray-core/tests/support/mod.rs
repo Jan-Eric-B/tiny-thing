@@ -3,7 +3,7 @@
 
 use device_daemon::{DaemonConfig, DeviceDaemon};
 use protocol::local::{AppMessage, DaemonMessage};
-use protocol::{MessageReader, MessageWriter};
+use protocol::{InputAction, MessageReader, MessageWriter};
 use std::net::SocketAddr;
 use std::time::Duration;
 use tokio::net::TcpStream;
@@ -46,11 +46,11 @@ pub async fn start_device_daemon() -> RunningDaemon {
     }
 }
 
-/// Stands in for the Device app: connects to the Device daemon's local socket
-/// and records every message it receives.
+/// Stands in for the Device app: connects to the Device daemon's local socket,
+/// records every message it receives and sends input actions on request.
 pub struct RecordingDeviceApp {
     reader: MessageReader<OwnedReadHalf, DaemonMessage>,
-    _writer: MessageWriter<OwnedWriteHalf, AppMessage>,
+    writer: MessageWriter<OwnedWriteHalf, AppMessage>,
     received: Vec<DaemonMessage>,
 }
 
@@ -59,9 +59,18 @@ impl RecordingDeviceApp {
         let (read, write) = TcpStream::connect(app_address).await.unwrap().into_split();
         Self {
             reader: MessageReader::new(read),
-            _writer: MessageWriter::new(write),
+            writer: MessageWriter::new(write),
             received: Vec::new(),
         }
+    }
+
+    /// Sends `action` as the Device app does when the user asks for it.
+    #[allow(
+        dead_code,
+        reason = "each test file compiles this module, not all of them use it"
+    )]
+    pub async fn send(&mut self, action: InputAction) {
+        self.writer.send(&AppMessage::Input(action)).await.unwrap();
     }
 
     /// Waits until `expected` arrives, failing the test after [`PATIENCE`].

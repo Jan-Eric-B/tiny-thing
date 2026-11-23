@@ -1,5 +1,7 @@
 //! Runs the Tray core with a fake `MediaSource` that reports one fixed Now
-//! Playing, for trying the Simulator without a media player:
+//! Playing, for trying the Simulator without a media player. Input actions
+//! from the Device are logged but change nothing, so an optimistic play/pause
+//! on the Device falls back after a moment:
 //!
 //! ```text
 //! cargo run -p device-daemon
@@ -11,7 +13,7 @@ use clap::Parser;
 use std::net::{Ipv4Addr, SocketAddr};
 use std::process::ExitCode;
 use tray_core::Session;
-use tray_core::media::{FakeMediaSource, NowPlaying};
+use tray_core::media::{FakeMediaSource, NowPlaying, PlaybackState};
 
 #[derive(Debug, Parser)]
 struct Args {
@@ -26,6 +28,10 @@ struct Args {
     /// Artist to report as Now Playing.
     #[arg(long, default_value = "Massive Attack")]
     artist: String,
+
+    /// Report Now Playing as paused instead of playing.
+    #[arg(long)]
+    paused: bool,
 }
 
 #[tokio::main]
@@ -42,6 +48,11 @@ async fn main() -> ExitCode {
     media.set(Some(NowPlaying {
         title: args.title,
         artist: args.artist,
+        playback: if args.paused {
+            PlaybackState::Paused
+        } else {
+            PlaybackState::Playing
+        },
     }));
 
     let session = match Session::connect(args.device).await {

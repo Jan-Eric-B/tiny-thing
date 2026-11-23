@@ -9,12 +9,13 @@ mod support;
 use protocol::local::DaemonMessage;
 use support::{RecordingDeviceApp, start_device_daemon};
 use tray_core::Session;
-use tray_core::media::{FakeMediaSource, NowPlaying};
+use tray_core::media::{FakeMediaSource, NowPlaying, PlaybackState};
 
 fn song(title: &str, artist: &str) -> NowPlaying {
     NowPlaying {
         title: title.to_owned(),
         artist: artist.to_owned(),
+        playback: PlaybackState::Playing,
     }
 }
 
@@ -22,6 +23,7 @@ fn shown(title: &str, artist: &str) -> DaemonMessage {
     DaemonMessage::NowPlaying(Some(protocol::NowPlaying {
         title: title.to_owned(),
         artist: artist.to_owned(),
+        playback: protocol::PlaybackState::Playing,
     }))
 }
 
@@ -79,6 +81,36 @@ async fn a_device_app_that_starts_late_still_gets_what_is_playing() {
 
     let mut late_app = RecordingDeviceApp::connect(daemon.app_address).await;
     late_app
+        .wait_for(&shown("Teardrop", "Massive Attack"))
+        .await;
+}
+
+#[tokio::test]
+async fn pausing_and_playing_reach_the_device_app() {
+    let daemon = start_device_daemon().await;
+    let mut device_app = RecordingDeviceApp::connect(daemon.app_address).await;
+    let media = FakeMediaSource::new();
+    media.set(Some(song("Teardrop", "Massive Attack")));
+    let session = Session::connect(daemon.tray_address).await.unwrap();
+    let media_for_session = media.clone();
+    tokio::spawn(async move { session.run(&media_for_session).await });
+    device_app
+        .wait_for(&shown("Teardrop", "Massive Attack"))
+        .await;
+
+    media.set(Some(NowPlaying {
+        playback: PlaybackState::Paused,
+        ..song("Teardrop", "Massive Attack")
+    }));
+    device_app
+        .wait_for(&DaemonMessage::NowPlaying(Some(protocol::NowPlaying {
+            playback: protocol::PlaybackState::Paused,
+            ..protocol::NowPlaying::from(&song("Teardrop", "Massive Attack"))
+        })))
+        .await;
+
+    media.set(Some(song("Teardrop", "Massive Attack")));
+    device_app
         .wait_for(&shown("Teardrop", "Massive Attack"))
         .await;
 }
