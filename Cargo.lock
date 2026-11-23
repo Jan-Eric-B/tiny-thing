@@ -1484,6 +1484,7 @@ version = "0.1.0"
 dependencies = [
  "clap",
  "protocol",
+ "serde",
  "thiserror 2.0.21",
  "tokio",
  "tokio-util",
@@ -1846,6 +1847,18 @@ checksum = "8be9f3dfaaffdae2972880079a491a1a8bb7cbed0b8dd7a347f668b4150a3b93"
 dependencies = [
  "event-listener",
  "pin-project-lite",
+]
+
+[[package]]
+name = "fast_image_resize"
+version = "6.2.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "f056f6b866ac980e0ebf973c6579170fa03285cb79d448435bd4d8fa2a74b511"
+dependencies = [
+ "cfg-if",
+ "document-features",
+ "num-traits",
+ "thiserror 2.0.21",
 ]
 
 [[package]]
@@ -3302,6 +3315,7 @@ checksum = "85ab80394333c02fe689eaf900ab500fbd0c2213da414687ebf995a65d5a6104"
 dependencies = [
  "bytemuck",
  "byteorder-lite",
+ "image-webp",
  "moxcms",
  "num-traits",
  "png",
@@ -5177,6 +5191,7 @@ version = "0.1.0"
 dependencies = [
  "futures-util",
  "postcard",
+ "qoi",
  "serde",
  "thiserror 2.0.21",
  "tokio",
@@ -5199,6 +5214,15 @@ name = "pxfm"
 version = "0.1.30"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "d55d956fa96f5ec02be2e13af0e20391a5aa83d6a074e3ad368959d0fab299ea"
+
+[[package]]
+name = "qoi"
+version = "0.4.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "7f6d64c71eb498fe9eae14ce4ec935c555749aef511cca85b5568910d6e48001"
+dependencies = [
+ "bytemuck",
+]
 
 [[package]]
 name = "quick-error"
@@ -7174,6 +7198,7 @@ name = "tray-app"
 version = "0.1.0"
 dependencies = [
  "clap",
+ "image",
  "protocol",
  "tauri",
  "tauri-build",
@@ -7193,6 +7218,8 @@ version = "0.1.0"
 dependencies = [
  "clap",
  "device-daemon",
+ "fast_image_resize",
+ "image",
  "protocol",
  "thiserror 2.0.21",
  "tokio",

@@ -12,6 +12,7 @@
 //! Device daemon sends [`DeviceMessage`]s. The Device daemon and the Device
 //! app talk over a local socket with the messages in [`local`].
 
+mod artwork;
 mod frame;
 mod handshake;
 pub mod local;
@@ -19,6 +20,10 @@ mod message;
 mod percent;
 mod version;
 
+pub use artwork::{
+    ARTWORK_BOX, Artwork, ArtworkError, ArtworkId, Image, ImageError, PRESSED_CONTROL_WHITE_ALPHA,
+    Rgb, RgbPixels, SCREEN_HEIGHT, SCREEN_WIDTH,
+};
 pub use frame::{FrameError, MAX_FRAME_LEN, MessageReader, MessageWriter};
 pub use handshake::{HANDSHAKE_TIMEOUT, Handshake, HandshakeError};
 pub use message::{DeviceMessage, InputAction, NowPlaying, PlaybackState, TrayMessage, Volume};

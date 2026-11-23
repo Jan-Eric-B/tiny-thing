@@ -4,6 +4,8 @@
 //! [`media`] and [`volume`]; the Device is reached through a [`Session`] with the Device
 //! daemon (ADR-0003: the Device listens, the Tray app connects).
 
+mod artwork;
+mod artwork_supply;
 pub mod media;
 mod session;
 pub mod volume;

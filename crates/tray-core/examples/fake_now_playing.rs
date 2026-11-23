@@ -8,14 +8,15 @@
 //! ```text
 //! cargo run -p device-daemon
 //! cargo run -p device-app
-//! cargo run -p tray-core --example fake-now-playing -- --title "Teardrop" --artist "Massive Attack"
+//! cargo run -p tray-core --example fake-now-playing -- --title "Teardrop" --artist "Massive Attack" --artwork cover.jpg
 //! ```
 
 use clap::Parser;
 use std::net::{Ipv4Addr, SocketAddr};
+use std::path::PathBuf;
 use std::process::ExitCode;
 use tray_core::Session;
-use tray_core::media::{FakeMediaSource, NowPlaying, PlaybackState};
+use tray_core::media::{Artwork, FakeMediaSource, NowPlaying, PlaybackState};
 use tray_core::volume::{FakeVolumeControl, Percent, Volume};
 
 #[derive(Debug, Parser)]
@@ -35,6 +36,10 @@ struct Args {
     /// Report Now Playing as paused instead of playing.
     #[arg(long)]
     paused: bool,
+
+    /// Image file (PNG, JPEG, BMP or WebP) to report as the Artwork.
+    #[arg(long)]
+    artwork: Option<PathBuf>,
 
     /// Volume level to start at, in percent.
     #[arg(long, default_value = "50", value_parser = percent)]
@@ -61,6 +66,23 @@ async fn main() -> ExitCode {
         .init();
     let args = Args::parse();
 
+    let artwork = match &args.artwork {
+        Some(path) => match std::fs::read(path) {
+            Ok(encoded) => match Artwork::from_encoded(encoded) {
+                Ok(artwork) => Some(artwork),
+                Err(error) => {
+                    tracing::error!(path = %path.display(), %error, "not an Artwork");
+                    return ExitCode::FAILURE;
+                }
+            },
+            Err(error) => {
+                tracing::error!(path = %path.display(), %error, "cannot read the Artwork");
+                return ExitCode::FAILURE;
+            }
+        },
+        None => None,
+    };
+
     let media = FakeMediaSource::new();
     media.set(Some(NowPlaying {
         title: args.title,
@@ -70,6 +92,7 @@ async fn main() -> ExitCode {
         } else {
             PlaybackState::Playing
         },
+        artwork,
     }));
 
     let volume = FakeVolumeControl::new(Volume {

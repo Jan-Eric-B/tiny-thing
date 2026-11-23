@@ -14,4 +14,4 @@ mod ui {
     slint::include_modules!();
 }
 
-pub use ui::{AppWindow, DeviceInput, TouchControl};
+pub use ui::{AppWindow, DeviceInput, Theme, TouchControl};

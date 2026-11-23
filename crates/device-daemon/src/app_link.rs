@@ -1,6 +1,6 @@
 //! The local socket to the Device app.
 
-use crate::{StateView, newest_connection};
+use crate::{ArtworkNews, StateView, newest_connection};
 use protocol::local::{AppMessage, DaemonMessage};
 use protocol::{FrameError, InputAction, MessageReader, MessageWriter};
 use tokio::net::tcp::{OwnedReadHalf, OwnedWriteHalf};
@@ -49,6 +49,7 @@ async fn send_to_app(
 ) -> Result<(), AppLinkError> {
     state.now_playing.mark_changed();
     state.volume.mark_changed();
+    state.artwork.mark_changed();
     loop {
         let message = tokio::select! {
             changed = state.now_playing.changed() => {
@@ -58,6 +59,15 @@ async fn send_to_app(
             changed = state.volume.changed() => {
                 changed.map_err(|_| AppLinkError::StateClosed)?;
                 DaemonMessage::Volume(*state.volume.borrow_and_update())
+            }
+            changed = state.artwork.changed() => {
+                changed.map_err(|_| AppLinkError::StateClosed)?;
+                // Cheap: the images are shared, not copied.
+                match state.artwork.borrow_and_update().clone() {
+                    Some(ArtworkNews::Here(artwork)) => DaemonMessage::Artwork(artwork),
+                    Some(ArtworkNews::Unavailable(id)) => DaemonMessage::ArtworkUnavailable(id),
+                    None => continue,
+                }
             }
         };
         writer.send(&message).await?;

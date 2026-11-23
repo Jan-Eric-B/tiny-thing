@@ -1,6 +1,7 @@
 //! Event handlers registered with Windows, removed again when dropped.
 
 use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, Ordering};
 use tokio::sync::Notify;
 use windows::Foundation::TypedEventHandler;
 use windows::core::RuntimeType;
@@ -53,6 +54,25 @@ where
 {
     let changed = Arc::clone(changed);
     TypedEventHandler::new(move |_, _| {
+        changed.notify_one();
+        Ok(())
+    })
+}
+
+/// An event handler that sets `flag`, then wakes whoever waits on
+/// `changed`, so the reader can tell which kind of event woke it.
+pub fn mark_and_wake<Sender, Args>(
+    flag: &Arc<AtomicBool>,
+    changed: &Arc<Notify>,
+) -> TypedEventHandler<Sender, Args>
+where
+    Sender: RuntimeType + 'static,
+    Args: RuntimeType + 'static,
+{
+    let flag = Arc::clone(flag);
+    let changed = Arc::clone(changed);
+    TypedEventHandler::new(move |_, _| {
+        flag.store(true, Ordering::Release);
         changed.notify_one();
         Ok(())
     })

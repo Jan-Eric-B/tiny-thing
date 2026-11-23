@@ -1,4 +1,7 @@
-// The Device's screen: 800x480, white text on a dark ground.
+// The Device's screen: 800x480, white text on a dark ground: the Backdrop
+// of Now Playing's Artwork, or black. The Artwork sits in a box of its own
+// beside the text, never under it. Images arrive at the exact pixel size they
+// are drawn at, so each is placed at its own size and never rescaled.
 //
 // Physical input arrives as key events. In the Simulator the keyboard
 // stands in for the Device: Enter is the dial press, 1, 2 and 3 are buttons
@@ -22,6 +25,14 @@ export enum TouchControl {
     previous,
     play-pause,
     next,
+}
+
+// Colors the Device app shares with the Tray app's Artwork pipeline.
+export global Theme {
+    // Laid over a control's circle while it is pressed. The Accent the icons
+    // take is chosen to stand out on the Backdrop with this on top, so it
+    // must stay PRESSED_CONTROL_WHITE_ALPHA in the protocol.
+    out property <color> pressed-control-tint: #ffffff40;
 }
 
 // Icons on a 24x24 grid.
@@ -119,6 +130,7 @@ component ControlButton {
     in property <string> icon;
     // The circle's diameter.
     in property <length> size: 88px;
+    in property <color> icon-color: #ffffff;
     callback clicked();
 
     width: 112px;
@@ -142,7 +154,7 @@ component ControlButton {
         width: root.size;
         height: root.size;
         border-radius: root.size / 2;
-        background: touch.pressed ? #ffffff40 : #ffffff1a;
+        background: touch.pressed ? Theme.pressed-control-tint : #ffffff1a;
 
         Path {
             x: (parent.width - self.width) / 2;
@@ -152,7 +164,7 @@ component ControlButton {
             viewbox-width: 24;
             viewbox-height: 24;
             commands: root.icon;
-            fill: #ffffff;
+            fill: root.icon-color;
         }
     }
 }
@@ -170,6 +182,15 @@ export component AppWindow inherits Window {
     in property <int> volume-level;
     // Whether the computer is muted; shown for as long as it is.
     in property <bool> volume-muted;
+    // Whether Now Playing has Artwork; its box shows only then, also while
+    // the Artwork is still on its way.
+    in property <bool> has-artwork;
+    // Whether the Artwork, its Backdrop and its Accent are here and shown.
+    in property <bool> artwork-shown;
+    in property <image> artwork;
+    in property <image> backdrop;
+    // For the icons; white without Artwork.
+    in property <color> accent: #ffffff;
 
     callback device-input(DeviceInput);
     callback touch-control(TouchControl);
@@ -179,6 +200,14 @@ export component AppWindow inherits Window {
     height: 480px;
     background: #000000;
     forward-focus: keys;
+
+    if root.artwork-shown: backdrop := Image {
+        x: 0;
+        y: 0;
+        width: root.backdrop.width * 1px;
+        height: root.backdrop.height * 1px;
+        source: root.backdrop;
+    }
 
     keys := FocusScope {
         key-pressed(event) => {
@@ -245,53 +274,86 @@ export component AppWindow inherits Window {
                 accept
             }
 
-            VerticalLayout {
-                padding: 48px;
-                spacing: 12px;
-                alignment: center;
+            HorizontalLayout {
+                padding: root.has-artwork ? 32px : 48px;
+                spacing: 32px;
 
-                Text {
-                    text: root.now-playing-title;
-                    color: #ffffff;
-                    font-size: 44px;
-                    font-weight: 700;
-                    overflow: elide;
-                }
-
-                Text {
-                    text: root.now-playing-artist;
-                    color: #ffffff;
-                    font-size: 30px;
-                    overflow: elide;
-                }
-
-                if root.has-now-playing: HorizontalLayout {
-                    padding-top: 24px;
-                    spacing: 16px;
+                // As large as the Artwork can get (ARTWORK_BOX in the
+                // protocol); the Artwork sits in its middle.
+                if root.has-artwork: VerticalLayout {
                     alignment: center;
 
-                    ControlButton {
-                        label: "Previous";
-                        icon: Icons.previous;
-                        clicked => {
-                            root.touch-control(TouchControl.previous);
+                    artwork-box := Rectangle {
+                        width: 352px;
+                        height: 352px;
+                        border-radius: 8px;
+                        // A placeholder while the Artwork is on its way.
+                        background: root.artwork-shown ? transparent : #ffffff10;
+
+                        if root.artwork-shown: Image {
+                            x: (parent.width - self.width) / 2;
+                            y: (parent.height - self.height) / 2;
+                            width: root.artwork.width * 1px;
+                            height: root.artwork.height * 1px;
+                            source: root.artwork;
+                            accessible-role: image;
+                            accessible-label: "Artwork";
                         }
                     }
+                }
 
-                    ControlButton {
-                        label: root.playing ? "Pause" : "Play";
-                        icon: root.playing ? Icons.pause : Icons.play;
-                        size: 112px;
-                        clicked => {
-                            root.touch-control(TouchControl.play-pause);
-                        }
+                VerticalLayout {
+                    spacing: 12px;
+                    alignment: center;
+
+                    Text {
+                        text: root.now-playing-title;
+                        color: #ffffff;
+                        font-size: 44px;
+                        font-weight: 700;
+                        overflow: elide;
                     }
 
-                    ControlButton {
-                        label: "Next";
-                        icon: Icons.next;
-                        clicked => {
-                            root.touch-control(TouchControl.next);
+                    Text {
+                        text: root.now-playing-artist;
+                        color: #ffffff;
+                        font-size: 30px;
+                        overflow: elide;
+                    }
+
+                    if root.has-now-playing: HorizontalLayout {
+                        padding-top: 24px;
+                        // Three controls fill the text beside the Artwork
+                        // exactly.
+                        spacing: root.has-artwork ? 8px : 16px;
+                        alignment: center;
+
+                        ControlButton {
+                            label: "Previous";
+                            icon: Icons.previous;
+                            icon-color: root.accent;
+                            clicked => {
+                                root.touch-control(TouchControl.previous);
+                            }
+                        }
+
+                        ControlButton {
+                            label: root.playing ? "Pause" : "Play";
+                            icon: root.playing ? Icons.pause : Icons.play;
+                            icon-color: root.accent;
+                            size: 112px;
+                            clicked => {
+                                root.touch-control(TouchControl.play-pause);
+                            }
+                        }
+
+                        ControlButton {
+                            label: "Next";
+                            icon: Icons.next;
+                            icon-color: root.accent;
+                            clicked => {
+                                root.touch-control(TouchControl.next);
+                            }
                         }
                     }
                 }

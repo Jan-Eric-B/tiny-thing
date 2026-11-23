@@ -4,8 +4,8 @@
 use crate::play_pause::PlayPause;
 use crate::{AppWindow, input};
 use protocol::local::DaemonMessage;
-use protocol::{InputAction, PlaybackState, Volume};
-use slint::{ComponentHandle, Timer, TimerMode};
+use protocol::{Artwork, ArtworkId, ImageError, InputAction, PlaybackState, Volume};
+use slint::{Color, ComponentHandle, Image, Rgb8Pixel, SharedPixelBuffer, Timer, TimerMode};
 use std::cell::{Cell, RefCell};
 use std::rc::{Rc, Weak};
 use std::time::Duration;
@@ -41,7 +41,24 @@ struct State {
     volume: Cell<Option<Volume>>,
     /// Hides the Volume indicator once the Volume rests.
     volume_hold: Timer,
+    /// The Artwork Now Playing names; `None` when it names none or nothing
+    /// plays.
+    artwork_id: Cell<Option<ArtworkId>>,
+    /// The Artwork last received, ready to draw. Only one is kept: the
+    /// Device daemon keeps the others.
+    artwork: RefCell<Option<DrawnArtwork>>,
+    /// The Artwork last reported as not to be had (or that could not be
+    /// drawn); Now Playing that names it shows as having no Artwork.
+    unavailable: Cell<Option<ArtworkId>>,
     send: Box<dyn Fn(InputAction)>,
+}
+
+/// An Artwork decoded for drawing.
+struct DrawnArtwork {
+    id: ArtworkId,
+    image: Image,
+    backdrop: Image,
+    accent: Color,
 }
 
 impl Screen {
@@ -53,6 +70,9 @@ impl Screen {
             hold: Timer::default(),
             volume: Cell::new(None),
             volume_hold: Timer::default(),
+            artwork_id: Cell::new(None),
+            artwork: RefCell::new(None),
+            unavailable: Cell::new(None),
             send: Box::new(send),
         });
         // The window holds only weak references, so dropping the `Screen`
@@ -74,6 +94,12 @@ impl Screen {
             DaemonMessage::NowPlaying(now_playing) => {
                 let window = &self.state.window;
                 window.set_has_now_playing(now_playing.is_some());
+                self.state.artwork_id.set(
+                    now_playing
+                        .as_ref()
+                        .and_then(|now_playing| now_playing.artwork),
+                );
+                self.state.show_artwork();
                 let (title, artist, playback) = now_playing
                     .map(|now_playing| {
                         (now_playing.title, now_playing.artist, now_playing.playback)
@@ -87,8 +113,46 @@ impl Screen {
                 self.state.show_play_pause();
             }
             DaemonMessage::Volume(volume) => self.state.report_volume(volume),
+            DaemonMessage::Artwork(artwork) => {
+                match DrawnArtwork::decode(&artwork) {
+                    Ok(drawn) => {
+                        self.state.artwork.replace(Some(drawn));
+                    }
+                    Err(error) => {
+                        tracing::warn!(id = ?artwork.id(), %error, "cannot draw the Artwork");
+                        self.state.unavailable.set(Some(artwork.id()));
+                    }
+                }
+                self.state.show_artwork();
+            }
+            DaemonMessage::ArtworkUnavailable(id) => {
+                self.state.unavailable.set(Some(id));
+                self.state.show_artwork();
+            }
         }
     }
+}
+
+impl DrawnArtwork {
+    fn decode(artwork: &Artwork) -> Result<Self, ImageError> {
+        let protocol::Rgb { r, g, b } = artwork.accent();
+        Ok(Self {
+            id: artwork.id(),
+            image: slint_image(artwork.image())?,
+            backdrop: slint_image(artwork.backdrop())?,
+            accent: Color::from_rgb_u8(r, g, b),
+        })
+    }
+}
+
+/// `image` decoded straight into the buffer Slint draws from.
+fn slint_image(image: &protocol::Image) -> Result<Image, ImageError> {
+    // An Artwork's images have readable headers; were one not readable,
+    // decoding it into an empty buffer reports why.
+    let (width, height) = image.size().unwrap_or((0, 0));
+    let mut pixels = SharedPixelBuffer::<Rgb8Pixel>::new(width, height);
+    image.decode_into(pixels.make_mut_bytes())?;
+    Ok(Image::from_rgb8(pixels))
 }
 
 /// Carries out `action`: play/pause shows its result at once, a Volume step
@@ -126,6 +190,33 @@ fn act(state: &Weak<State>, action: InputAction) {
 }
 
 impl State {
+    /// Shows the Artwork Now Playing names, with its Backdrop and Accent,
+    /// once it is here: never another song's Artwork, and white on black
+    /// until then. Artwork that cannot be had shows as none: no box, the
+    /// text across the full width.
+    fn show_artwork(&self) {
+        let window = &self.window;
+        let wanted = self.artwork_id.get();
+        let artwork = self.artwork.borrow();
+        let drawn = artwork
+            .as_ref()
+            .filter(|artwork| Some(artwork.id) == wanted);
+        let unavailable = drawn.is_none() && wanted.is_some() && self.unavailable.get() == wanted;
+        window.set_has_artwork(wanted.is_some() && !unavailable);
+        match drawn {
+            Some(artwork) => {
+                window.set_artwork(artwork.image.clone());
+                window.set_backdrop(artwork.backdrop.clone());
+                window.set_accent(artwork.accent);
+                window.set_artwork_shown(true);
+            }
+            None => {
+                window.set_artwork_shown(false);
+                window.set_accent(Color::from_rgb_u8(255, 255, 255));
+            }
+        }
+    }
+
     fn show_play_pause(&self) {
         let playing = self.play_pause.borrow().shown() == PlaybackState::Playing;
         self.window.set_playing(playing);

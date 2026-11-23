@@ -17,6 +17,7 @@ fn teardrop() -> NowPlaying {
         title: "Teardrop".to_owned(),
         artist: "Massive Attack".to_owned(),
         playback: PlaybackState::Playing,
+        artwork: None,
     }
 }
 

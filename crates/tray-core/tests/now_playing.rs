@@ -17,6 +17,7 @@ fn song(title: &str, artist: &str) -> NowPlaying {
         title: title.to_owned(),
         artist: artist.to_owned(),
         playback: PlaybackState::Playing,
+        artwork: None,
     }
 }
 
@@ -25,6 +26,7 @@ fn shown(title: &str, artist: &str) -> DaemonMessage {
         title: title.to_owned(),
         artist: artist.to_owned(),
         playback: protocol::PlaybackState::Playing,
+        artwork: None,
     }))
 }
 

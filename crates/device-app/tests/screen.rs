@@ -96,6 +96,7 @@ impl Harness {
             title: title.to_owned(),
             artist: "Massive Attack".to_owned(),
             playback,
+            artwork: None,
         })));
     }
 }

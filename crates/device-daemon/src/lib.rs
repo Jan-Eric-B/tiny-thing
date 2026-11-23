@@ -4,21 +4,31 @@
 //!
 //! It keeps the latest state itself, so a Device app that starts or restarts
 //! later is brought up to date at once (ADR-0004: the Device app may come and
-//! go, the Device daemon stays).
+//! go, the Device daemon stays). It also keeps the last few Artworks and asks
+//! the Tray app only for Artwork it does not have.
 
 mod app_link;
+mod artwork_cache;
 mod newest_connection;
 mod tray_link;
 
-use protocol::{InputAction, NowPlaying, SoftwareVersion, Volume};
+use artwork_cache::ArtworkCache;
+use protocol::{Artwork, ArtworkId, InputAction, NowPlaying, SoftwareVersion, Volume};
 use std::io;
 use std::net::SocketAddr;
+use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
 use tokio::net::TcpListener;
 use tokio::sync::{broadcast, watch};
 
 /// How many input actions may wait for the Tray app link before the oldest
 /// are dropped. Far more than anyone presses while one message goes out.
 const INPUT_QUEUE: usize = 32;
+
+/// How many Artworks the Device daemon keeps. An Artwork takes at most about
+/// 2 MB (a Backdrop of the screen's size and an Artwork of the Artwork box's
+/// size, as badly compressed as QOI gets; real covers take a few hundred
+/// kilobytes), so these and the one shown take at most about 10 MB.
+pub const ARTWORK_CACHE_LEN: usize = 4;
 
 /// The version of this Device daemon, stated in the Handshake.
 pub const DEVICE_DAEMON_VERSION: SoftwareVersion = SoftwareVersion::from_parts(
@@ -66,8 +76,10 @@ impl DeviceDaemon {
     /// failed connections are logged, and a new connection from either
     /// replaces the one before it.
     ///
-    /// Now Playing and the Volume are kept and handed to every new Device app
-    /// connection.
+    /// Now Playing, its Artwork and the Volume are kept and handed to every
+    /// new Device app connection. The last [`ARTWORK_CACHE_LEN`] Artworks are
+    /// kept across Tray app connections; the Tray app is asked only for
+    /// Artwork not among them.
     /// Input actions are not kept: one that arrives while no Tray app is
     /// connected is dropped, so a later connection does not replay stale
     /// presses.
@@ -75,6 +87,8 @@ impl DeviceDaemon {
         let state = State {
             now_playing: watch::Sender::new(None),
             volume: watch::Sender::new(None),
+            artwork: watch::Sender::new(None),
+            artworks: Arc::default(),
         };
         let app_view = state.subscribe();
         let (inputs, _) = broadcast::channel::<InputAction>(INPUT_QUEUE);
@@ -90,6 +104,11 @@ impl DeviceDaemon {
 struct State {
     now_playing: watch::Sender<Option<NowPlaying>>,
     volume: watch::Sender<Option<Volume>>,
+    /// The Artwork of Now Playing once it is here, or word that it cannot
+    /// be had; may still be about an earlier Now Playing, which the Device
+    /// app ignores.
+    artwork: watch::Sender<Option<ArtworkNews>>,
+    artworks: Arc<Mutex<ArtworkCache>>,
 }
 
 /// A view of [`State`] that follows its changes.
@@ -97,6 +116,28 @@ struct State {
 struct StateView {
     now_playing: watch::Receiver<Option<NowPlaying>>,
     volume: watch::Receiver<Option<Volume>>,
+    artwork: watch::Receiver<Option<ArtworkNews>>,
+}
+
+/// What the Device daemon knows about the Artwork of Now Playing.
+#[derive(Debug, Clone)]
+enum ArtworkNews {
+    Here(Artwork),
+    /// The Tray app cannot make it.
+    Unavailable(ArtworkId),
+}
+
+impl ArtworkNews {
+    fn id(&self) -> ArtworkId {
+        match self {
+            Self::Here(artwork) => artwork.id(),
+            Self::Unavailable(id) => *id,
+        }
+    }
+
+    fn is_here(&self) -> bool {
+        matches!(self, Self::Here(_))
+    }
 }
 
 impl State {
@@ -104,6 +145,26 @@ impl State {
         StateView {
             now_playing: self.now_playing.subscribe(),
             volume: self.volume.subscribe(),
+            artwork: self.artwork.subscribe(),
         }
+    }
+
+    fn artworks(&self) -> MutexGuard<'_, ArtworkCache> {
+        // The cache stays consistent even if a holder panicked.
+        self.artworks.lock().unwrap_or_else(PoisonError::into_inner)
+    }
+
+    /// Hands `news` to the Device app, unless it has it already.
+    fn tell(&self, news: ArtworkNews) {
+        self.artwork.send_if_modified(|told| {
+            let known = told
+                .as_ref()
+                .is_some_and(|told| told.id() == news.id() && told.is_here() == news.is_here());
+            if known {
+                return false;
+            }
+            *told = Some(news);
+            true
+        });
     }
 }

@@ -15,9 +15,14 @@ device-daemon = { path = "crates/device-daemon" }
 tray-core = { path = "crates/tray-core" }
 
 clap = { version = "4.6.9", features = ["derive"] }
+fast_image_resize = "6.2.0"
 futures-util = { version = "0.3.34", default-features = false, features = ["sink"] }
 i-slint-backend-testing = "1.19.0"
+# Decodes the Artwork a Media session supplies; the formats Windows players
+# hand out.
+image = { version = "0.25.10", default-features = false, features = ["bmp", "jpeg", "png", "webp"] }
 postcard = { version = "1.2.0", default-features = false, features = ["use-std"] }
+qoi = "0.4.1"
 serde = { version = "1.0.229", features = ["derive"] }
 slint = "1.19.0"
 slint-build = "1.19.0"

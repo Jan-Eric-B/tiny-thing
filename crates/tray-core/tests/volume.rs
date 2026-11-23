@@ -48,6 +48,7 @@ async fn connected(
         title: "Teardrop".to_owned(),
         artist: "Massive Attack".to_owned(),
         playback: PlaybackState::Playing,
+        artwork: None,
     }));
     let computer = FakeVolumeControl::new(start);
     let session = Session::connect(daemon.tray_address).await.unwrap();

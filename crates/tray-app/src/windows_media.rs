@@ -11,24 +11,36 @@
 //!
 //! The transport controls go to whichever Media session is current when they
 //! are called ([`controls`]).
+//!
+//! The Artwork (thumbnail) is read as the player encoded it ([`artwork`]),
+//! and only when the session or its media properties changed: a play/pause
+//! reuses the Artwork read last. Now Playing goes out before the thumbnail
+//! is read and again once it is ([`known_artwork`]), so the thumbnail never
+//! holds up play/pause or the title. The Tray core prepares the Artwork for
+//! the Device.
 
+mod artwork;
 mod call;
 mod controls;
+mod known_artwork;
 mod now_playing;
 mod subscription;
 
 use crate::retry::retry_delay;
 use call::CallError;
+use known_artwork::{KnownArtwork, Plan, Song};
 use now_playing::MediaProperties;
 use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::Duration;
-use subscription::{Subscription, wake};
+use subscription::{Subscription, mark_and_wake, wake};
 use tokio::sync::{Notify, watch};
 use tokio::task::JoinHandle;
 use tray_core::media::{ControlError, MediaSource, NowPlaying, TransportControl};
 use windows::Media::Control::{
     GlobalSystemMediaTransportControlsSession as WindowsSession,
     GlobalSystemMediaTransportControlsSessionManager as SessionManager,
+    GlobalSystemMediaTransportControlsSessionMediaProperties as WindowsProperties,
 };
 use windows::core::{IUnknown, Interface};
 
@@ -73,8 +85,10 @@ impl WindowsMediaSource {
         let follower = Follower {
             manager: manager.clone(),
             changed,
+            properties_changed: Arc::new(AtomicBool::new(false)),
             _manager_events: manager_events,
             followed: None,
+            known_artwork: KnownArtwork::default(),
             now_playing: sender,
         };
         Ok(Self {
@@ -120,8 +134,11 @@ impl MediaSource for WindowsMediaSource {
 struct Follower {
     manager: SessionManager,
     changed: Arc<Notify>,
+    /// Set by `MediaPropertiesChanged`: the thumbnail may have changed.
+    properties_changed: Arc<AtomicBool>,
     _manager_events: [Subscription; 2],
     followed: Option<FollowedSession>,
+    known_artwork: KnownArtwork,
     now_playing: watch::Sender<Option<NowPlaying>>,
 }
 
@@ -157,14 +174,49 @@ impl Follower {
     /// Reads the current Media session and publishes its Now Playing if it
     /// differs from what was published last. On a failed read the last Now
     /// Playing stays until a read succeeds.
+    ///
+    /// When the thumbnail has to be read, Now Playing goes out first with
+    /// the Artwork known for the song (none for a new song), then again with
+    /// the Artwork read. A thumbnail that cannot be read does not fail the
+    /// read: the song keeps its known Artwork, and the next wake-up reads
+    /// the thumbnail again.
     async fn refresh(&mut self) -> Result<(), CallError> {
         let current = current_session(&self.manager)?;
         self.follow(current.as_ref());
-        let properties = match &current {
-            None => None,
-            Some(session) => Some(read_properties(session).await?),
+        if self.properties_changed.swap(false, Ordering::AcqRel) {
+            self.known_artwork.properties_changed();
+        }
+        let Some(session) = current else {
+            self.publish(None);
+            return Ok(());
         };
-        let now_playing = now_playing::now_playing(properties);
+        let read = read_properties(&session).await?;
+        let (meanwhile, read_thumbnail) = match self.known_artwork.plan(&read.song) {
+            Plan::Reuse(artwork) => (artwork, false),
+            Plan::Read { meanwhile } => (meanwhile, true),
+        };
+        let now_playing = now_playing::now_playing(Some(MediaProperties {
+            artwork: meanwhile,
+            ..read.text
+        }));
+        self.publish(now_playing.clone());
+        let Some(now_playing) = now_playing.filter(|_| read_thumbnail) else {
+            return Ok(());
+        };
+        let thumbnail = artwork::read(&read.properties).await;
+        if let Err(error) = &thumbnail {
+            tracing::debug!(%error, "cannot read the Artwork");
+        }
+        let artwork = self.known_artwork.read_finished(read.song, thumbnail);
+        self.publish(Some(NowPlaying {
+            artwork,
+            ..now_playing
+        }));
+        Ok(())
+    }
+
+    /// Publishes `now_playing` if it differs from what was published last.
+    fn publish(&self, now_playing: Option<NowPlaying>) {
         self.now_playing.send_if_modified(|published| {
             if *published == now_playing {
                 return false;
@@ -173,7 +225,6 @@ impl Follower {
             *published = now_playing;
             true
         });
-        Ok(())
     }
 
     /// Moves the session event handlers over to `current` if it is not the
@@ -188,6 +239,7 @@ impl Follower {
             return;
         }
         self.followed = None;
+        self.known_artwork.forget();
         let Some(session) = current else {
             tracing::info!("no current Media session");
             return;
@@ -196,7 +248,7 @@ impl Follower {
             .SourceAppUserModelId()
             .map(|app| app.to_string_lossy())
             .unwrap_or_default();
-        match FollowedSession::subscribe(session, &self.changed) {
+        match FollowedSession::subscribe(session, &self.changed, &self.properties_changed) {
             Ok(followed) => {
                 tracing::info!(%app, "following the current Media session");
                 self.followed = Some(followed);
@@ -210,14 +262,20 @@ impl Follower {
 }
 
 impl FollowedSession {
-    fn subscribe(session: &WindowsSession, changed: &Arc<Notify>) -> windows::core::Result<Self> {
+    fn subscribe(
+        session: &WindowsSession,
+        changed: &Arc<Notify>,
+        properties_changed: &Arc<AtomicBool>,
+    ) -> windows::core::Result<Self> {
         Ok(Self {
             session: session.clone(),
             _events: [
                 Subscription::register(
                     "MediaPropertiesChanged",
                     session,
-                    |session| session.MediaPropertiesChanged(&wake(changed)),
+                    |session| {
+                        session.MediaPropertiesChanged(&mark_and_wake(properties_changed, changed))
+                    },
                     |session, token| session.RemoveMediaPropertiesChanged(token),
                 )?,
                 Subscription::register(
@@ -265,12 +323,35 @@ fn current_session(manager: &SessionManager) -> windows::core::Result<Option<Win
     }
 }
 
-async fn read_properties(session: &WindowsSession) -> Result<MediaProperties, CallError> {
+/// What a read of the current Media session found, before its thumbnail is
+/// read.
+struct SessionRead {
+    /// Holds the thumbnail reference.
+    properties: WindowsProperties,
+    /// Without Artwork.
+    text: MediaProperties,
+    song: Song,
+}
+
+/// Reads what the current Media session reports, except its thumbnail.
+async fn read_properties(session: &WindowsSession) -> Result<SessionRead, CallError> {
     let properties = call::finish(session.TryGetMediaPropertiesAsync()?, READ_TIMEOUT).await?;
-    Ok(MediaProperties {
+    let song = Song {
         title: properties.Title()?.to_string_lossy(),
         artist: properties.Artist()?.to_string_lossy(),
         album_artist: properties.AlbumArtist()?.to_string_lossy(),
+        album_title: properties.AlbumTitle()?.to_string_lossy(),
+    };
+    let text = MediaProperties {
+        title: song.title.clone(),
+        artist: song.artist.clone(),
+        album_artist: song.album_artist.clone(),
         playback_status: session.GetPlaybackInfo()?.PlaybackStatus()?,
+        artwork: None,
+    };
+    Ok(SessionRead {
+        properties,
+        text,
+        song,
     })
 }

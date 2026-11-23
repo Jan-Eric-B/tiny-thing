@@ -1,4 +1,4 @@
-use crate::Percent;
+use crate::{Artwork, ArtworkId, Percent};
 use serde::{Deserialize, Serialize};
 
 /// What the operating system reports as Now Playing, as far as the Device
@@ -8,6 +8,10 @@ pub struct NowPlaying {
     pub title: String,
     pub artist: String,
     pub playback: PlaybackState,
+    /// The Artwork that goes with it; `None` when the Media session supplies
+    /// none. The Device asks for Artwork it does not have
+    /// ([`DeviceMessage::MissingArtwork`]).
+    pub artwork: Option<ArtworkId>,
 }
 
 /// Whether Now Playing is playing or paused.
@@ -53,6 +57,13 @@ pub enum TrayMessage {
     NowPlaying(Option<NowPlaying>),
     /// The current Volume; `None` when the computer has no output device.
     Volume(Option<Volume>),
+    /// The Artwork the Device asked for. Sent only on request, so an image
+    /// the Device keeps is not sent again.
+    Artwork(Artwork),
+    /// The Artwork the Device asked for cannot be made (the image the Media
+    /// session supplied cannot be read). The Device shows the song without
+    /// Artwork rather than waiting for it.
+    ArtworkUnavailable(ArtworkId),
 }
 
 /// A message from the Device daemon to the Tray app, after the Handshake.
@@ -62,4 +73,6 @@ pub enum TrayMessage {
 pub enum DeviceMessage {
     /// The user asked for this on the Device.
     Input(InputAction),
+    /// The Device does not have the Artwork of the current Now Playing.
+    MissingArtwork(ArtworkId),
 }

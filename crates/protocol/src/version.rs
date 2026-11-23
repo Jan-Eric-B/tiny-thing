@@ -11,7 +11,11 @@ pub struct ProtocolVersion(pub u16);
 ///
 /// 2: Now Playing carries the playback state; the Device sends input actions.
 /// 3: the Tray app sends the Volume; the Device sends Volume steps.
-pub const PROTOCOL_VERSION: ProtocolVersion = ProtocolVersion(3);
+/// 4: Now Playing carries an Artwork id; the Device asks for Artwork it does
+///    not have, and the Tray app sends it.
+/// 5: the Tray app says when it cannot make the Artwork asked for; Artwork
+///    is checked against the screen and Artwork box sizes when it is read.
+pub const PROTOCOL_VERSION: ProtocolVersion = ProtocolVersion(5);
 
 impl fmt::Display for ProtocolVersion {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {

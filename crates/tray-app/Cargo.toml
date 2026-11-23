@@ -21,6 +21,7 @@ tracing-subscriber.workspace = true
 tray-core.workspace = true
 windows = { workspace = true, features = [
     "Media_Control",
+    "Storage_Streams",
     "Win32_Media_Audio",
     "Win32_Media_Audio_Endpoints",
     "Win32_System_Com",
@@ -29,6 +30,10 @@ windows = { workspace = true, features = [
 ] }
 windows-core.workspace = true
 windows-future.workspace = true
+
+[target.'cfg(windows)'.dev-dependencies]
+# Encodes the small images the tests hand around as Artwork.
+image.workspace = true
 
 # Not gated: build scripts run on the host, which can differ from the target,
 # so build.rs asks Cargo for the target instead (no Tauri system libraries

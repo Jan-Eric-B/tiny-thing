@@ -76,6 +76,10 @@ impl RecordingDeviceApp {
     /// Waits until `expected` arrives, failing the test after [`PATIENCE`].
     /// The match and everything received before it are used up, so a later
     /// call only sees newer messages.
+    #[allow(
+        dead_code,
+        reason = "each test file compiles this module, not all of them use it"
+    )]
     pub async fn wait_for(&mut self, expected: &DaemonMessage) {
         let found = tokio::time::timeout(PATIENCE, async {
             loop {
@@ -98,6 +102,39 @@ impl RecordingDeviceApp {
             "expected {expected:?}, received only {:?}",
             self.received
         );
+    }
+
+    /// Waits until a message `matches`, failing the test after [`PATIENCE`],
+    /// and returns it. Only the match is used up; messages received before
+    /// it stay for later calls.
+    #[allow(
+        dead_code,
+        reason = "each test file compiles this module, not all of them use it"
+    )]
+    pub async fn wait_until(
+        &mut self,
+        what: &str,
+        matches: impl Fn(&DaemonMessage) -> bool,
+    ) -> DaemonMessage {
+        let found = tokio::time::timeout(PATIENCE, async {
+            loop {
+                if let Some(index) = self.received.iter().position(&matches) {
+                    return self.received.remove(index);
+                }
+                let message = self
+                    .reader
+                    .recv()
+                    .await
+                    .unwrap()
+                    .expect("the Device daemon closed the local socket");
+                self.received.push(message);
+            }
+        })
+        .await;
+        match found {
+            Ok(message) => message,
+            Err(_) => panic!("expected {what}, received only {:?}", self.received),
+        }
     }
 
     /// Waits until the Device daemon closes the local socket, failing the test

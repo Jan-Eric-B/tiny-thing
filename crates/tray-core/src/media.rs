@@ -5,6 +5,11 @@ mod fake;
 
 pub use fake::FakeMediaSource;
 
+use crate::artwork::{self, PIPELINE_VERSION};
+use protocol::ArtworkId;
+use std::fmt;
+use std::hash::{DefaultHasher, Hasher};
+use std::sync::Arc;
 use tokio::sync::watch;
 
 /// What the operating system reports as Now Playing.
@@ -13,6 +18,62 @@ pub struct NowPlaying {
     pub title: String,
     pub artist: String,
     pub playback: PlaybackState,
+    /// `None` when the Media session supplies no Artwork.
+    pub artwork: Option<Artwork>,
+}
+
+/// The Artwork a Media session supplies, as the operating system hands it
+/// out: an encoded image (PNG, JPEG, BMP or WebP) of any size and aspect
+/// ratio. Cheap to clone.
+#[derive(Clone, PartialEq, Eq)]
+pub struct Artwork {
+    id: ArtworkId,
+    encoded: Arc<[u8]>,
+}
+
+/// Why bytes a Media session supplied are no Artwork.
+#[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
+#[error("the Artwork cannot be read: {reason}")]
+pub struct UnreadableArtwork {
+    reason: String,
+}
+
+impl Artwork {
+    /// The Artwork in `encoded`, if its header names an image of a known
+    /// format, at least one and at most 4096 pixels a side. Only the header
+    /// is read; an image whose pixels turn out unreadable shows when the
+    /// Device asks for it, and the Device is then told it cannot have it.
+    pub fn from_encoded(encoded: impl Into<Arc<[u8]>>) -> Result<Self, UnreadableArtwork> {
+        let encoded = encoded.into();
+        artwork::size(&encoded).map_err(|reason| UnreadableArtwork { reason })?;
+        // The std hasher is fixed within a build, which is all the Device
+        // needs: a new Tray app release at most misses its kept Artwork once.
+        let mut hasher = DefaultHasher::new();
+        hasher.write_u32(PIPELINE_VERSION);
+        hasher.write(&encoded);
+        Ok(Self {
+            id: ArtworkId(hasher.finish()),
+            encoded,
+        })
+    }
+
+    /// Identifies the Artwork by a hash of its content and the version of
+    /// the pipeline that prepares it for the Device: the same image has the
+    /// same id under any title, and a new image a new one.
+    pub fn id(&self) -> ArtworkId {
+        self.id
+    }
+
+    /// The image as the operating system handed it out.
+    pub fn encoded(&self) -> &[u8] {
+        &self.encoded
+    }
+}
+
+impl fmt::Debug for Artwork {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "Artwork({:?}, {} bytes)", self.id, self.encoded.len())
+    }
 }
 
 /// Whether Now Playing is playing or paused.
@@ -86,6 +147,7 @@ impl From<&NowPlaying> for protocol::NowPlaying {
             title: now_playing.title.clone(),
             artist: now_playing.artist.clone(),
             playback: now_playing.playback.into(),
+            artwork: now_playing.artwork.as_ref().map(Artwork::id),
         }
     }
 }

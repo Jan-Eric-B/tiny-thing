@@ -5,9 +5,9 @@
 
 use protocol::local::{AppMessage, DaemonMessage};
 use protocol::{
-    DeviceMessage, Handshake, InputAction, MessageReader, MessageWriter, NowPlaying,
-    PROTOCOL_VERSION, Percent, PlaybackState, ProtocolVersion, SoftwareVersion, TrayMessage,
-    Volume,
+    Artwork, ArtworkId, DeviceMessage, Handshake, Image, InputAction, MessageReader, MessageWriter,
+    NowPlaying, PROTOCOL_VERSION, Percent, PlaybackState, ProtocolVersion, Rgb, RgbPixels,
+    SoftwareVersion, TrayMessage, Volume,
 };
 use serde::Serialize;
 use serde::de::DeserializeOwned;
@@ -22,7 +22,32 @@ fn now_playing(title: &str, artist: &str) -> NowPlaying {
         title: title.to_owned(),
         artist: artist.to_owned(),
         playback: PlaybackState::Playing,
+        artwork: Some(ArtworkId(0x0123_4567_89ab_cdef)),
     }
+}
+
+/// An image of one colour.
+fn image(width: u32, height: u32, colour: [u8; 3]) -> Image {
+    Image::encode(&RgbPixels {
+        width,
+        height,
+        rgb: colour.repeat((width * height) as usize),
+    })
+    .unwrap()
+}
+
+fn artwork(id: u64) -> Artwork {
+    Artwork::new(
+        ArtworkId(id),
+        image(352, 198, [200, 30, 40]),
+        image(800, 480, [20, 3, 4]),
+        Rgb {
+            r: 255,
+            g: 140,
+            b: 150,
+        },
+    )
+    .unwrap()
 }
 
 /// Every input action. The exhaustive match makes adding an action without
@@ -53,7 +78,10 @@ fn all_input_actions() -> Vec<InputAction> {
 fn tray_message_samples() -> Vec<TrayMessage> {
     fn covered(message: &TrayMessage) {
         match message {
-            TrayMessage::NowPlaying(_) | TrayMessage::Volume(_) => {}
+            TrayMessage::NowPlaying(_)
+            | TrayMessage::Volume(_)
+            | TrayMessage::Artwork(_)
+            | TrayMessage::ArtworkUnavailable(_) => {}
         }
     }
     let samples = vec![
@@ -68,7 +96,14 @@ fn tray_message_samples() -> Vec<TrayMessage> {
             playback: PlaybackState::Paused,
             ..now_playing("Teardrop", "Massive Attack")
         })),
+        TrayMessage::NowPlaying(Some(NowPlaying {
+            artwork: None,
+            ..now_playing("Teardrop", "Massive Attack")
+        })),
         TrayMessage::NowPlaying(None),
+        TrayMessage::Artwork(artwork(1)),
+        TrayMessage::Artwork(artwork(u64::MAX)),
+        TrayMessage::ArtworkUnavailable(ArtworkId(3)),
         TrayMessage::Volume(Some(Volume {
             level: percent(0),
             muted: false,
@@ -86,13 +121,14 @@ fn tray_message_samples() -> Vec<TrayMessage> {
 fn device_message_samples() -> Vec<DeviceMessage> {
     fn covered(message: &DeviceMessage) {
         match message {
-            DeviceMessage::Input(_) => {}
+            DeviceMessage::Input(_) | DeviceMessage::MissingArtwork(_) => {}
         }
     }
-    let samples: Vec<DeviceMessage> = all_input_actions()
+    let mut samples: Vec<DeviceMessage> = all_input_actions()
         .into_iter()
         .map(DeviceMessage::Input)
         .collect();
+    samples.push(DeviceMessage::MissingArtwork(ArtworkId(42)));
     samples.iter().for_each(covered);
     samples
 }
@@ -100,7 +136,10 @@ fn device_message_samples() -> Vec<DeviceMessage> {
 fn daemon_message_samples() -> Vec<DaemonMessage> {
     fn covered(message: &DaemonMessage) {
         match message {
-            DaemonMessage::NowPlaying(_) | DaemonMessage::Volume(_) => {}
+            DaemonMessage::NowPlaying(_)
+            | DaemonMessage::Volume(_)
+            | DaemonMessage::Artwork(_)
+            | DaemonMessage::ArtworkUnavailable(_) => {}
         }
     }
     let samples = vec![
@@ -110,6 +149,8 @@ fn daemon_message_samples() -> Vec<DaemonMessage> {
             ..now_playing("Windowlicker", "Aphex Twin")
         })),
         DaemonMessage::NowPlaying(None),
+        DaemonMessage::Artwork(artwork(7)),
+        DaemonMessage::ArtworkUnavailable(ArtworkId(8)),
         DaemonMessage::Volume(Some(Volume {
             level: percent(42),
             muted: true,

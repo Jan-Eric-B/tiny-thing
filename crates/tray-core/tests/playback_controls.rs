@@ -24,6 +24,7 @@ fn song(title: &str) -> NowPlaying {
         title: title.to_owned(),
         artist: "Massive Attack".to_owned(),
         playback: PlaybackState::Playing,
+        artwork: None,
     }
 }
 

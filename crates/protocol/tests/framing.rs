@@ -63,6 +63,7 @@ async fn a_receive_cancelled_halfway_through_a_frame_loses_nothing() {
         title: "Teardrop".to_owned(),
         artist: "Massive Attack".to_owned(),
         playback: PlaybackState::Playing,
+        artwork: None,
     }));
     let bytes = frame(&postcard::to_allocvec(&message).unwrap());
     let (mut near, far) = tokio::io::duplex(64 * 1024);

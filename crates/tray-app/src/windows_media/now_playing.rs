@@ -1,7 +1,7 @@
 //! Turns what Windows reports about the current Media session into Now
 //! Playing. Pure, so the rules are tested without Windows media players.
 
-use tray_core::media::{NowPlaying, PlaybackState};
+use tray_core::media::{Artwork, NowPlaying, PlaybackState};
 use windows::Media::Control::GlobalSystemMediaTransportControlsSessionPlaybackStatus as PlaybackStatus;
 
 /// What the current Media session reports about what it plays, as read from
@@ -12,6 +12,8 @@ pub struct MediaProperties {
     pub artist: String,
     pub album_artist: String,
     pub playback_status: PlaybackStatus,
+    /// `None` when the session supplies none.
+    pub artwork: Option<Artwork>,
 }
 
 /// Now Playing for the Media session Windows marks as current, given its
@@ -34,6 +36,7 @@ pub fn now_playing(current: Option<MediaProperties>) -> Option<NowPlaying> {
         title: title.to_owned(),
         artist: artist.to_owned(),
         playback: playback_state(properties.playback_status),
+        artwork: properties.artwork,
     })
 }
 
@@ -58,6 +61,7 @@ mod tests {
             artist: artist.to_owned(),
             album_artist: album_artist.to_owned(),
             playback_status: PlaybackStatus::Playing,
+            artwork: None,
         }
     }
 
@@ -66,6 +70,7 @@ mod tests {
             title: title.to_owned(),
             artist: artist.to_owned(),
             playback: PlaybackState::Playing,
+            artwork: None,
         })
     }
 
@@ -87,6 +92,20 @@ mod tests {
         assert_eq!(
             now_playing(Some(properties("Teardrop", "Massive Attack", ""))),
             song("Teardrop", "Massive Attack")
+        );
+    }
+
+    #[test]
+    fn the_artwork_of_the_session_goes_with_now_playing() {
+        let artwork = super::super::artwork::sample(1);
+        let properties = MediaProperties {
+            artwork: Some(artwork.clone()),
+            ..properties("Teardrop", "Massive Attack", "")
+        };
+
+        assert_eq!(
+            now_playing(Some(properties)).and_then(|now_playing| now_playing.artwork),
+            Some(artwork)
         );
     }
 

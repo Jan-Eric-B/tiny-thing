@@ -2,16 +2,19 @@
 //! Handshake until either side closes the connection.
 
 use crate::TRAY_APP_VERSION;
+use crate::artwork;
+use crate::artwork_supply::ArtworkSupply;
 use crate::media::{ControlError, MediaSource, NowPlaying, TransportControl};
 use crate::volume::{Step, Volume, VolumeControl, VolumeError};
 use protocol::{
-    DeviceMessage, FrameError, Handshake, HandshakeError, InputAction, MessageReader,
+    ArtworkId, DeviceMessage, FrameError, Handshake, HandshakeError, InputAction, MessageReader,
     MessageWriter, TrayMessage,
 };
 use std::io;
 use std::net::SocketAddr;
 use tokio::net::TcpStream;
 use tokio::net::tcp::{OwnedReadHalf, OwnedWriteHalf};
+use tokio::sync::mpsc::error::TrySendError;
 use tokio::sync::{mpsc, watch};
 
 /// How many input actions from the Device may wait while a transport control
@@ -22,6 +25,11 @@ const CONTROL_QUEUE: usize = 1;
 /// Setting the Volume takes milliseconds, so this only fills up when the
 /// operating system hangs; the steps beyond it are dropped.
 const VOLUME_QUEUE: usize = 16;
+
+/// How many requests for Artwork from the Device may wait while one is
+/// answered. The Device asks at most once per Now Playing; requests beyond
+/// this are dropped.
+const ARTWORK_REQUEST_QUEUE: usize = 4;
 
 /// Why no session could be started.
 #[derive(Debug, thiserror::Error)]
@@ -133,7 +141,17 @@ impl Session {
         } = self;
         let (controls, pending_controls) = mpsc::channel(CONTROL_QUEUE);
         let (steps, pending_steps) = mpsc::channel(VOLUME_QUEUE);
-        let routes = Routes { controls, steps };
+        let (missing_artwork, wanted_artwork) = mpsc::channel(ARTWORK_REQUEST_QUEUE);
+        let routes = Routes {
+            controls,
+            steps,
+            missing_artwork,
+        };
+        let changes = Changes {
+            now_playing: media.now_playing(),
+            volume: volume.volume(),
+            wanted_artwork,
+        };
         tokio::select! {
             // In this order on every poll, so `carry_out` and `adjust` take an
             // action handed over by `receive_from_device` before that reads
@@ -145,46 +163,71 @@ impl Session {
             () = carry_out(media, pending_controls) => Err(SessionError::DeviceGone),
             () = adjust(volume, pending_steps) => Err(SessionError::DeviceGone),
             result = receive_from_device(&mut reader, routes) => result,
-            result = send_to_device(&mut writer, media.now_playing(), volume.volume()) => result,
+            result = send_to_device(&mut writer, changes) => result,
         }
     }
 }
 
-/// Sends the current Now Playing and Volume at once, then every change.
+/// What [`send_to_device`] tells the Device about.
+struct Changes {
+    now_playing: watch::Receiver<Option<NowPlaying>>,
+    volume: watch::Receiver<Option<Volume>>,
+    /// The Artwork the Device asked for.
+    wanted_artwork: mpsc::Receiver<ArtworkId>,
+}
+
+/// Sends the current Now Playing and Volume at once, then every change, and
+/// the Artwork of Now Playing when the Device asks for it.
+///
+/// Artwork is prepared off this loop ([`ArtworkSupply`]), so Now Playing and
+/// the Volume never wait for it.
 async fn send_to_device(
     writer: &mut MessageWriter<OwnedWriteHalf, TrayMessage>,
-    mut now_playing: watch::Receiver<Option<NowPlaying>>,
-    mut volume: watch::Receiver<Option<Volume>>,
+    changes: Changes,
 ) -> Result<(), SessionError> {
+    let Changes {
+        mut now_playing,
+        mut volume,
+        mut wanted_artwork,
+    } = changes;
     now_playing.mark_changed();
     volume.mark_changed();
+    let mut artwork = ArtworkSupply::new(artwork::prepare);
     loop {
         let message = tokio::select! {
             changed = now_playing.changed() => {
                 if changed.is_err() {
                     return Ok(());
                 }
-                TrayMessage::NowPlaying(
-                    now_playing
-                        .borrow_and_update()
-                        .as_ref()
-                        .map(protocol::NowPlaying::from),
-                )
+                let current = now_playing.borrow_and_update();
+                artwork.now_playing(current.as_ref().and_then(|current| current.artwork.as_ref()));
+                TrayMessage::NowPlaying(current.as_ref().map(protocol::NowPlaying::from))
             }
             // Never fails: the channel stays open as long as the
             // `VolumeControl` lives, which outlives the session.
             Ok(()) = volume.changed() => {
                 TrayMessage::Volume(volume.borrow_and_update().map(protocol::Volume::from))
             }
+            // Closes only when `receive_from_device` has ended, which ends
+            // the session.
+            Some(id) = wanted_artwork.recv() => match artwork.wanted(id) {
+                Some(answer) => answer,
+                None => continue,
+            },
+            finished = artwork.finished() => match finished {
+                Some(answer) => answer,
+                None => continue,
+            },
         };
         writer.send(&message).await?;
     }
 }
 
-/// Where [`receive_from_device`] hands input actions over to.
+/// Where [`receive_from_device`] hands what the Device asks for over to.
 struct Routes {
     controls: mpsc::Sender<TransportControl>,
     steps: mpsc::Sender<Step>,
+    missing_artwork: mpsc::Sender<ArtworkId>,
 }
 
 /// What an input action from the Device acts on.
@@ -204,7 +247,8 @@ fn route(action: InputAction) -> Route {
 }
 
 /// Passes each input action from the Device on to [`carry_out`] or
-/// [`adjust`], dropping it when their queue is full.
+/// [`adjust`], dropping it when their queue is full, and each request for
+/// Artwork on to [`send_to_device`].
 async fn receive_from_device(
     reader: &mut MessageReader<OwnedReadHalf, DeviceMessage>,
     routes: Routes,
@@ -226,6 +270,19 @@ async fn receive_from_device(
                 // count as one after the other, not as presses during a
                 // control still running.
                 tokio::task::yield_now().await;
+            }
+            DeviceMessage::MissingArtwork(id) => {
+                tracing::debug!(?id, "the Device asks for Artwork");
+                // Never waited on, so reading from the Device never waits
+                // for writing to it.
+                match routes.missing_artwork.try_send(id) {
+                    Ok(()) => {}
+                    Err(TrySendError::Full(_)) => {
+                        tracing::debug!(?id, "too many requests for Artwork waiting; dropped");
+                    }
+                    // `send_to_device` has ended, which ends the session.
+                    Err(TrySendError::Closed(_)) => {}
+                }
             }
         }
     }

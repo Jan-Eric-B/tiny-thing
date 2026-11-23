@@ -133,6 +133,7 @@ async fn the_device_daemon_refuses_a_tray_app_speaking_another_protocol_version(
         title: "Teardrop".to_owned(),
         artist: "Massive Attack".to_owned(),
         playback: PlaybackState::Playing,
+        artwork: None,
     }));
     let session = Session::connect(daemon.tray_address).await.unwrap();
     tokio::spawn(async move { session.run(&media, &FakeVolumeControl::default()).await });
@@ -141,6 +142,7 @@ async fn the_device_daemon_refuses_a_tray_app_speaking_another_protocol_version(
             title: "Teardrop".to_owned(),
             artist: "Massive Attack".to_owned(),
             playback: protocol::PlaybackState::Playing,
+            artwork: None,
         })))
         .await;
 }
