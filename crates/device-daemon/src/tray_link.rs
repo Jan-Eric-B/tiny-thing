@@ -2,12 +2,13 @@
 
 use crate::{DEVICE_DAEMON_VERSION, newest_connection};
 use protocol::{
-    DeviceMessage, FrameError, Handshake, HandshakeError, MessageReader, MessageWriter, NowPlaying,
-    TrayMessage,
+    DeviceMessage, FrameError, Handshake, HandshakeError, InputAction, MessageReader,
+    MessageWriter, NowPlaying, TrayMessage,
 };
 use tokio::net::tcp::{OwnedReadHalf, OwnedWriteHalf};
 use tokio::net::{TcpListener, TcpStream};
-use tokio::sync::watch;
+use tokio::sync::broadcast::error::RecvError;
+use tokio::sync::{broadcast, watch};
 
 #[derive(Debug, thiserror::Error)]
 enum TrayLinkError {
@@ -18,9 +19,16 @@ enum TrayLinkError {
 }
 
 /// Serves the Tray app for as long as it runs; the newest connection wins.
-pub(crate) async fn serve(listener: TcpListener, now_playing: watch::Sender<Option<NowPlaying>>) {
+/// Input actions sent to `inputs` go to the Tray app.
+pub(crate) async fn serve(
+    listener: TcpListener,
+    now_playing: watch::Sender<Option<NowPlaying>>,
+    inputs: broadcast::Sender<InputAction>,
+) {
     newest_connection::serve(listener, "Tray app", |stream| {
-        handle(stream, now_playing.clone())
+        // Subscribed on accept, so input actions count from the moment the
+        // Tray app connects; earlier ones are not replayed.
+        handle(stream, now_playing.clone(), inputs.subscribe())
     })
     .await;
 }
@@ -28,6 +36,7 @@ pub(crate) async fn serve(listener: TcpListener, now_playing: watch::Sender<Opti
 async fn handle(
     stream: TcpStream,
     now_playing: watch::Sender<Option<NowPlaying>>,
+    inputs: broadcast::Receiver<InputAction>,
 ) -> Result<(), TrayLinkError> {
     let (read, write) = stream.into_split();
     let mut reader = MessageReader::new(read);
@@ -38,17 +47,31 @@ async fn handle(
     tracing::info!(tray_version = %tray.software_version, "Handshake with the Tray app complete");
 
     tokio::select! {
-        result = send_to_tray(&mut writer) => result,
+        result = send_to_tray(&mut writer, inputs) => result,
         result = receive_from_tray(&mut reader, &now_playing) => result,
     }
 }
 
-/// Sends what the Device has to tell the Tray app. That is nothing yet:
-/// `DeviceMessage` gains variants with the input actions.
+/// Sends the input actions from the Device app to the Tray app, in order.
 async fn send_to_tray(
-    _writer: &mut MessageWriter<OwnedWriteHalf, DeviceMessage>,
+    writer: &mut MessageWriter<OwnedWriteHalf, DeviceMessage>,
+    mut inputs: broadcast::Receiver<InputAction>,
 ) -> Result<(), TrayLinkError> {
-    std::future::pending().await
+    loop {
+        match inputs.recv().await {
+            Ok(action) => writer.send(&DeviceMessage::Input(action)).await?,
+            Err(RecvError::Lagged(dropped)) => {
+                tracing::warn!(
+                    dropped,
+                    "input actions arrived faster than the Tray app took them"
+                );
+            }
+            // Unreachable: `serve` owns a sender and ends every connection it
+            // accepted before it drops that sender, so the channel never
+            // closes under a running connection.
+            Err(RecvError::Closed) => return Ok(()),
+        }
+    }
 }
 
 async fn receive_from_tray(

@@ -1,5 +1,6 @@
 //! The Device daemon: listens for the Tray app (ADR-0003), runs the Handshake,
-//! and passes what the Tray app sends on to the Device app over a local socket.
+//! passes what the Tray app sends on to the Device app over a local socket,
+//! and the Device app's input actions back to the Tray app.
 //!
 //! It keeps the latest state itself, so a Device app that starts or restarts
 //! later is brought up to date at once (ADR-0004: the Device app may come and
@@ -9,11 +10,15 @@ mod app_link;
 mod newest_connection;
 mod tray_link;
 
-use protocol::{NowPlaying, SoftwareVersion};
+use protocol::{InputAction, NowPlaying, SoftwareVersion};
 use std::io;
 use std::net::SocketAddr;
 use tokio::net::TcpListener;
-use tokio::sync::watch;
+use tokio::sync::{broadcast, watch};
+
+/// How many input actions may wait for the Tray app link before the oldest
+/// are dropped. Far more than anyone presses while one message goes out.
+const INPUT_QUEUE: usize = 32;
 
 /// The version of this Device daemon, stated in the Handshake.
 pub const DEVICE_DAEMON_VERSION: SoftwareVersion = SoftwareVersion::from_parts(
@@ -60,12 +65,18 @@ impl DeviceDaemon {
     /// Serves the Tray app and the Device app. Runs until the task is dropped:
     /// failed connections are logged, and a new connection from either
     /// replaces the one before it.
+    ///
+    /// Now Playing is kept and handed to every new Device app connection.
+    /// Input actions are not kept: one that arrives while no Tray app is
+    /// connected is dropped, so a later connection does not replay stale
+    /// presses.
     pub async fn run(self) {
         let (now_playing, _) = watch::channel::<Option<NowPlaying>>(None);
         let app_view = now_playing.subscribe();
+        let (inputs, _) = broadcast::channel::<InputAction>(INPUT_QUEUE);
         tokio::join!(
-            tray_link::serve(self.tray_listener, now_playing),
-            app_link::serve(self.app_listener, app_view),
+            tray_link::serve(self.tray_listener, now_playing, inputs.clone()),
+            app_link::serve(self.app_listener, app_view, inputs),
         );
     }
 }
