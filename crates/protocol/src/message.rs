@@ -1,0 +1,22 @@
+use serde::{Deserialize, Serialize};
+
+/// What the operating system reports as Now Playing, as far as the Device
+/// needs it.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct NowPlaying {
+    pub title: String,
+    pub artist: String,
+}
+
+/// A message from the Tray app to the Device daemon, after the Handshake.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub enum TrayMessage {
+    /// The current Now Playing; `None` when nothing plays.
+    NowPlaying(Option<NowPlaying>),
+}
+
+/// A message from the Device daemon to the Tray app, after the Handshake.
+///
+/// The Device sends nothing yet; input actions and Device status follow.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub enum DeviceMessage {}
