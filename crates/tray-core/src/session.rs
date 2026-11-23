@@ -12,10 +12,12 @@ use protocol::{
 };
 use std::io;
 use std::net::SocketAddr;
+use std::time::Duration;
 use tokio::net::TcpStream;
 use tokio::net::tcp::{OwnedReadHalf, OwnedWriteHalf};
 use tokio::sync::mpsc::error::TrySendError;
 use tokio::sync::{mpsc, watch};
+use tokio::time::Instant;
 
 /// How many input actions from the Device may wait while a transport control
 /// runs. More would only replay stale presses once a slow player answers.
@@ -30,6 +32,12 @@ const VOLUME_QUEUE: usize = 16;
 /// answered. The Device asks at most once per Now Playing; requests beyond
 /// this are dropped.
 const ARTWORK_REQUEST_QUEUE: usize = 4;
+
+/// How long nothing playing is held back after something played. Some
+/// players clear the title for a moment during a song change; when the next
+/// title follows within this time, the Device never shows the gap. Short
+/// enough that stopping a player still shows on the Device promptly.
+pub const NOTHING_PLAYING_HOLD: Duration = Duration::from_millis(500);
 
 /// Why no session could be started.
 #[derive(Debug, thiserror::Error)]
@@ -177,7 +185,9 @@ struct Changes {
 }
 
 /// Sends the current Now Playing and Volume at once, then every change, and
-/// the Artwork of Now Playing when the Device asks for it.
+/// the Artwork of Now Playing when the Device asks for it. Nothing playing
+/// after something playing goes out only once it has lasted
+/// [`NOTHING_PLAYING_HOLD`] ([`Told`]).
 ///
 /// Artwork is prepared off this loop ([`ArtworkSupply`]), so Now Playing and
 /// the Volume never wait for it.
@@ -193,6 +203,7 @@ async fn send_to_device(
     now_playing.mark_changed();
     volume.mark_changed();
     let mut artwork = ArtworkSupply::new(artwork::prepare);
+    let mut told = Told::default();
     loop {
         let message = tokio::select! {
             changed = now_playing.changed() => {
@@ -200,8 +211,19 @@ async fn send_to_device(
                     return Ok(());
                 }
                 let current = now_playing.borrow_and_update();
+                if !told.changed(current.is_some()) {
+                    continue;
+                }
+                // The Artwork follows what the Device is told, so while
+                // nothing playing is held back, the Device still gets the
+                // Artwork of what it shows.
                 artwork.now_playing(current.as_ref().and_then(|current| current.artwork.as_ref()));
                 TrayMessage::NowPlaying(current.as_ref().map(protocol::NowPlaying::from))
+            }
+            () = told.nothing_due() => {
+                told = Told::Nothing;
+                artwork.now_playing(None);
+                TrayMessage::NowPlaying(None)
             }
             // Never fails: the channel stays open as long as the
             // `VolumeControl` lives, which outlives the session.
@@ -220,6 +242,49 @@ async fn send_to_device(
             },
         };
         writer.send(&message).await?;
+    }
+}
+
+/// What the Device was last told about Now Playing, which decides whether a
+/// change goes out at once. Nothing playing after something playing is held
+/// back for [`NOTHING_PLAYING_HOLD`]; something playing always goes out at
+/// once and drops nothing playing held back; nothing playing after nothing
+/// playing changes nothing.
+#[derive(Debug, Clone, Copy, Default)]
+enum Told {
+    /// Nothing yet in this session: whatever plays goes out at once.
+    #[default]
+    NotYet,
+    Something,
+    /// Something, and nothing playing is held back until then.
+    SomethingUntil(Instant),
+    Nothing,
+}
+
+impl Told {
+    /// Now Playing changed to something playing (`true`) or nothing
+    /// (`false`). Returns whether the change goes out now.
+    fn changed(&mut self, something: bool) -> bool {
+        let (next, goes_out) = match (*self, something) {
+            (_, true) => (Self::Something, true),
+            (Self::NotYet, false) => (Self::Nothing, true),
+            (Self::Something, false) => (
+                Self::SomethingUntil(Instant::now() + NOTHING_PLAYING_HOLD),
+                false,
+            ),
+            (Self::SomethingUntil(_) | Self::Nothing, false) => return false,
+        };
+        *self = next;
+        goes_out
+    }
+
+    /// Finishes when nothing playing held back is due to go out; never while
+    /// none is held back.
+    async fn nothing_due(self) {
+        match self {
+            Self::SomethingUntil(until) => tokio::time::sleep_until(until).await,
+            Self::NotYet | Self::Something | Self::Nothing => std::future::pending().await,
+        }
     }
 }
 

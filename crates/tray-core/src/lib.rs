@@ -10,7 +10,7 @@ pub mod media;
 mod session;
 pub mod volume;
 
-pub use session::{ConnectError, Session, SessionError};
+pub use session::{ConnectError, NOTHING_PLAYING_HOLD, Session, SessionError};
 
 use protocol::SoftwareVersion;
 

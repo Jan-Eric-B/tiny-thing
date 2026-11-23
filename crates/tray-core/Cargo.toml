@@ -12,7 +12,7 @@ fast_image_resize.workspace = true
 image.workspace = true
 protocol.workspace = true
 thiserror.workspace = true
-tokio = { workspace = true, features = ["io-util", "macros", "net", "rt", "sync"] }
+tokio = { workspace = true, features = ["io-util", "macros", "net", "rt", "sync", "time"] }
 tracing.workspace = true
 
 [dev-dependencies]
