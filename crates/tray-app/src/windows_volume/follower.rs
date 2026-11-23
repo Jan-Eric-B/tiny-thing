@@ -11,7 +11,8 @@ use tray_core::volume::{Percent, Step, Volume, VolumeError, stepped};
 /// What the Core Audio thread is asked to do, by the Tray app or by a
 /// Windows callback.
 pub enum Command {
-    /// Move the level one step, reading and setting it on the same device.
+    /// Move the level one step and unmute, reading, setting and unmuting on
+    /// the same device.
     Step(Step, oneshot::Sender<Result<(), VolumeError>>),
     /// From Windows: another output device became the default.
     DefaultDeviceChanged,
@@ -35,6 +36,8 @@ pub trait Endpoint {
     fn read(&self) -> windows::core::Result<Volume>;
     /// Sets the level, leaving the mute state as it is.
     fn set_level(&self, level: Percent) -> windows::core::Result<()>;
+    /// Turns muting off, leaving the level as it is.
+    fn unmute(&self) -> windows::core::Result<()>;
 }
 
 /// The Core Audio thread's state.
@@ -165,17 +168,22 @@ impl<A: Audio, O: FnMut() -> windows::core::Result<A>> Follower<A, O> {
         });
     }
 
-    /// Moves the level of the followed device one step, reading and setting
-    /// it on that same device.
+    /// Moves the level of the followed device one step and unmutes it, like
+    /// the Windows volume keys, reading, setting and unmuting on that same
+    /// device.
     fn step(&mut self, step: Step) -> Result<(), VolumeError> {
         if matches!(self.followed, Followed::Lost) {
             // A step is worth trying again for at once.
             self.follow_default_device();
         }
         let result = match &self.followed {
-            Followed::Device(endpoint) => endpoint
-                .read()
-                .and_then(|current| endpoint.set_level(stepped(current.level, step))),
+            Followed::Device(endpoint) => endpoint.read().and_then(|current| {
+                endpoint.set_level(stepped(current.level, step))?;
+                if current.muted {
+                    endpoint.unmute()?;
+                }
+                Ok(())
+            }),
             Followed::NoDevice => return Err(VolumeError::NoOutputDevice),
             Followed::Lost => {
                 return Err(VolumeError::Platform(
@@ -307,6 +315,10 @@ mod tests {
         fn set_level(&self, level: Percent) -> windows::core::Result<()> {
             self.with_device(|device| device.volume.level = level)
         }
+
+        fn unmute(&self) -> windows::core::Result<()> {
+            self.with_device(|device| device.volume.muted = false)
+        }
     }
 
     /// A Core Audio thread on the fake computer.
@@ -433,6 +445,22 @@ mod tests {
         running.step(Step::Up).expect("the step is carried out");
 
         assert_eq!(running.level_of(SPEAKERS), 42);
+    }
+
+    #[test]
+    fn a_step_while_muted_unmutes_and_sets_the_level() {
+        let mut muted = computer(40, 10);
+        muted
+            .devices
+            .get_mut(SPEAKERS)
+            .expect("speakers exist")
+            .volume
+            .muted = true;
+        let running = start(muted);
+
+        running.step(Step::Down).expect("the step is carried out");
+
+        assert_eq!(lock(&running.computer).devices[SPEAKERS].volume, volume(38));
     }
 
     #[test]

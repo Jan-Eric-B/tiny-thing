@@ -117,21 +117,17 @@ async fn a_volume_step_up_at_100_percent_keeps_the_volume_and_the_session() {
 }
 
 #[tokio::test]
-async fn a_volume_step_keeps_the_mute_state() {
+async fn a_volume_step_while_muted_unmutes_and_changes_the_level() {
     let (_daemon, mut device_app, _media, _computer) = connected(Volume {
         level: percent(30),
         muted: true,
     })
     .await;
 
-    device_app.send(InputAction::VolumeUp).await;
+    // Like the Windows volume keys: a step unmutes, up or down.
+    device_app.send(InputAction::VolumeDown).await;
 
-    device_app
-        .wait_for(&shown(Some(Volume {
-            level: percent(32),
-            muted: true,
-        })))
-        .await;
+    device_app.wait_for(&shown(Some(volume(28)))).await;
 }
 
 #[tokio::test]

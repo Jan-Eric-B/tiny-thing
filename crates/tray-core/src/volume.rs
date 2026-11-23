@@ -41,9 +41,11 @@ pub trait VolumeControl: Send + Sync {
     fn volume(&self) -> watch::Receiver<Option<Volume>>;
 
     /// Moves the level one step ([`stepped`]) from the level the operating
-    /// system reports right now, leaving the mute state as it is. Reading and
-    /// setting are one operation on one output device, so a switch to
-    /// another default device never applies one device's level to another.
+    /// system reports right now and unmutes the computer, like the Windows
+    /// volume keys (up or down, also when the level is already at its
+    /// limit). Reading, setting and unmuting are one operation on one output
+    /// device, so a switch to another default device never applies one
+    /// device's level to another.
     fn step(&self, step: Step) -> impl Future<Output = Result<(), VolumeError>> + Send;
 }
 

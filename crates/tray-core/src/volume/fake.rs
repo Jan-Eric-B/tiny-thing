@@ -6,7 +6,8 @@ use tokio::sync::watch;
 /// [`step`](VolumeControl::step), for tests and for running the Tray core
 /// against the Simulator without touching the computer's Volume.
 ///
-/// Like a real computer, it reports every change, including its own.
+/// Like a real computer, it reports every change, including its own, and a
+/// step unmutes it.
 /// Clones share the same Volume.
 #[derive(Debug, Clone)]
 pub struct FakeVolumeControl {
@@ -54,9 +55,12 @@ impl VolumeControl for FakeVolumeControl {
         self.volume.send_if_modified(|volume| match volume {
             Some(volume) => {
                 result = Ok(());
-                let level = stepped(volume.level, step);
-                let changed = volume.level != level;
-                volume.level = level;
+                let next = Volume {
+                    level: stepped(volume.level, step),
+                    muted: false,
+                };
+                let changed = *volume != next;
+                *volume = next;
                 changed
             }
             None => false,

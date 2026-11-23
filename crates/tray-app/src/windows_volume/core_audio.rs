@@ -131,6 +131,12 @@ impl Endpoint for CoreAudioEndpoint {
                 .SetMasterVolumeLevelScalar(level::to_scalar(level), std::ptr::null())
         }
     }
+
+    fn unmute(&self) -> windows::core::Result<()> {
+        // SAFETY: see the module comment; no event context (null). S_FALSE
+        // (already unmuted) counts as success.
+        unsafe { self.volume.SetMute(false, std::ptr::null()) }
+    }
 }
 
 impl Drop for CoreAudioEndpoint {
