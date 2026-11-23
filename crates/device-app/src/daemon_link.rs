@@ -1,29 +1,39 @@
 //! The Device app's end of the local socket to the Device daemon.
 
 use protocol::local::{AppMessage, DaemonMessage};
-use protocol::{FrameError, MessageReader, MessageWriter};
+use protocol::{FrameError, InputAction, MessageReader, MessageWriter};
 use std::net::SocketAddr;
 use std::ops::ControlFlow;
 use std::time::Duration;
 use tokio::net::TcpStream;
 use tokio::net::tcp::{OwnedReadHalf, OwnedWriteHalf};
+use tokio::sync::mpsc;
 
 /// How long to wait before connecting again when the Device daemon is not
 /// (or no longer) there, for example while it starts.
 pub const RETRY_DELAY: Duration = Duration::from_millis(500);
 
 /// Receives messages from the Device daemon at `address` and hands each to
-/// `on_message`, connecting again whenever the local socket closes. Returns
-/// when `on_message` breaks.
+/// `on_message`, and sends it every input action from `actions`, connecting
+/// again whenever the local socket closes.
+///
+/// Input actions that pile up while there is no connection are dropped on
+/// connecting: a press is meant for now, not for whenever the Device daemon
+/// is back.
+///
+/// Returns when `on_message` breaks or `actions` closes, which both mean
+/// that the UI has shut down.
 pub async fn run(
     address: SocketAddr,
+    mut actions: mpsc::Receiver<InputAction>,
     mut on_message: impl FnMut(DaemonMessage) -> ControlFlow<()>,
 ) {
     loop {
         match TcpStream::connect(address).await {
             Ok(stream) => {
                 tracing::info!(%address, "connected to the Device daemon");
-                match handle(stream, &mut on_message).await {
+                drop_stale(&mut actions);
+                match handle(stream, &mut actions, &mut on_message).await {
                     Ok(ControlFlow::Break(())) => return,
                     Ok(ControlFlow::Continue(())) => {
                         tracing::info!("the Device daemon closed the local socket");
@@ -39,25 +49,42 @@ pub async fn run(
     }
 }
 
+fn drop_stale(actions: &mut mpsc::Receiver<InputAction>) {
+    let mut dropped = 0_usize;
+    while actions.try_recv().is_ok() {
+        dropped += 1;
+    }
+    if dropped > 0 {
+        tracing::info!(
+            dropped,
+            "input actions from while the Device daemon was away dropped"
+        );
+    }
+}
+
 async fn handle(
     stream: TcpStream,
+    actions: &mut mpsc::Receiver<InputAction>,
     on_message: &mut impl FnMut(DaemonMessage) -> ControlFlow<()>,
 ) -> Result<ControlFlow<()>, FrameError> {
     let (read, write) = stream.into_split();
     let mut reader = MessageReader::new(read);
     let mut writer = MessageWriter::new(write);
     tokio::select! {
-        result = send_to_daemon(&mut writer) => result,
+        result = send_to_daemon(&mut writer, actions) => result,
         result = receive_from_daemon(&mut reader, on_message) => result,
     }
 }
 
-/// Sends what the Device app has to tell the Device daemon. That is nothing
-/// yet: `AppMessage` gains variants with the input actions.
+/// Sends every input action, in order, until `actions` closes (`Break`).
 async fn send_to_daemon(
-    _writer: &mut MessageWriter<OwnedWriteHalf, AppMessage>,
+    writer: &mut MessageWriter<OwnedWriteHalf, AppMessage>,
+    actions: &mut mpsc::Receiver<InputAction>,
 ) -> Result<ControlFlow<()>, FrameError> {
-    std::future::pending().await
+    while let Some(action) = actions.recv().await {
+        writer.send(&AppMessage::Input(action)).await?;
+    }
+    Ok(ControlFlow::Break(()))
 }
 
 /// Hands every message to `on_message` until the local socket closes

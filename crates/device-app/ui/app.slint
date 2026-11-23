@@ -1,32 +1,170 @@
 // The Device's screen: 800x480, white text on a dark ground.
+//
+// Physical input arrives as key events. In the Simulator the keyboard
+// stands in for the Device: Enter is the dial press, 1, 2 and 3 are buttons
+// 1 to 3. Which action an input stands for is decided in Rust (input.rs).
+
+// A physical input on the Device.
+export enum DeviceInput {
+    dial-press,
+    button-1,
+    button-2,
+    button-3,
+}
+
+// An on-screen control.
+export enum TouchControl {
+    previous,
+    play-pause,
+    next,
+}
+
+// Icons on a 24x24 grid.
+global Icons {
+    out property <string> previous: "M 5 4 L 8 4 L 8 20 L 5 20 Z M 20 4 L 9 12 L 20 20 Z";
+    out property <string> play: "M 7 4 L 20 12 L 7 20 Z";
+    out property <string> pause: "M 6 4 L 10 4 L 10 20 L 6 20 Z M 14 4 L 18 4 L 18 20 L 14 20 Z";
+    out property <string> next: "M 4 4 L 15 12 L 4 20 Z M 16 4 L 19 4 L 19 20 L 16 20 Z";
+}
+
+// A round control. Every control has the same touch target, however large
+// its circle is drawn, so a row of them lines up.
+component ControlButton {
+    in property <string> label;
+    in property <string> icon;
+    // The circle's diameter.
+    in property <length> size: 88px;
+    callback clicked();
+
+    width: 112px;
+    height: 112px;
+
+    accessible-role: button;
+    accessible-label: root.label;
+    accessible-action-default => {
+        root.clicked();
+    }
+
+    touch := TouchArea {
+        clicked => {
+            root.clicked();
+        }
+    }
+
+    Rectangle {
+        x: (parent.width - self.width) / 2;
+        y: (parent.height - self.height) / 2;
+        width: root.size;
+        height: root.size;
+        border-radius: root.size / 2;
+        background: touch.pressed ? #ffffff40 : #ffffff1a;
+
+        Path {
+            x: (parent.width - self.width) / 2;
+            y: (parent.height - self.height) / 2;
+            width: root.size * 0.45;
+            height: root.size * 0.45;
+            viewbox-width: 24;
+            viewbox-height: 24;
+            commands: root.icon;
+            fill: #ffffff;
+        }
+    }
+}
 
 export component AppWindow inherits Window {
     in property <string> now-playing-title;
     in property <string> now-playing-artist;
+    // Whether anything plays; the controls show only then.
+    in property <bool> has-now-playing;
+    // Whether the play/pause control shows the playing state (offering to
+    // pause) rather than the paused state (offering to play).
+    in property <bool> playing;
+
+    callback device-input(DeviceInput);
+    callback touch-control(TouchControl);
 
     title: "TinyThing Simulator";
     width: 800px;
     height: 480px;
     background: #000000;
+    forward-focus: keys;
 
-    VerticalLayout {
-        padding: 48px;
-        spacing: 12px;
-        alignment: center;
-
-        Text {
-            text: root.now-playing-title;
-            color: #ffffff;
-            font-size: 44px;
-            font-weight: 700;
-            overflow: elide;
+    keys := FocusScope {
+        key-pressed(event) => {
+            // A held-down key or button acts once.
+            if (event.repeat) {
+                return accept;
+            }
+            if (event.text == Key.Return) {
+                root.device-input(DeviceInput.dial-press);
+                return accept;
+            }
+            if (event.text == "1") {
+                root.device-input(DeviceInput.button-1);
+                return accept;
+            }
+            if (event.text == "2") {
+                root.device-input(DeviceInput.button-2);
+                return accept;
+            }
+            if (event.text == "3") {
+                root.device-input(DeviceInput.button-3);
+                return accept;
+            }
+            reject
         }
 
-        Text {
-            text: root.now-playing-artist;
-            color: #ffffff;
-            font-size: 30px;
-            overflow: elide;
+        VerticalLayout {
+            padding: 48px;
+            spacing: 12px;
+            alignment: center;
+
+            Text {
+                text: root.now-playing-title;
+                color: #ffffff;
+                font-size: 44px;
+                font-weight: 700;
+                overflow: elide;
+            }
+
+            Text {
+                text: root.now-playing-artist;
+                color: #ffffff;
+                font-size: 30px;
+                overflow: elide;
+            }
+
+            if root.has-now-playing: HorizontalLayout {
+                padding-top: 24px;
+                spacing: 16px;
+                alignment: center;
+
+                ControlButton {
+                    label: "Previous";
+                    icon: Icons.previous;
+                    clicked => {
+                        root.touch-control(TouchControl.previous);
+                    }
+                }
+
+                ControlButton {
+                    label: root.playing ? "Pause" : "Play";
+                    icon: root.playing ? Icons.pause : Icons.play;
+                    size: 112px;
+                    clicked => {
+                        root.touch-control(TouchControl.play-pause);
+                    }
+                }
+
+                ControlButton {
+                    label: "Next";
+                    icon: Icons.next;
+                    clicked => {
+                        root.touch-control(TouchControl.next);
+                    }
+                }
+            }
         }
     }
 }

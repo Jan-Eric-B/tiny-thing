@@ -11,7 +11,7 @@ publish.workspace = true
 clap.workspace = true
 protocol.workspace = true
 slint.workspace = true
-tokio = { workspace = true, features = ["io-util", "macros", "net", "rt", "time"] }
+tokio = { workspace = true, features = ["io-util", "macros", "net", "rt", "sync", "time"] }
 tracing.workspace = true
 tracing-subscriber.workspace = true
 
