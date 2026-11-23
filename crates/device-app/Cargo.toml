@@ -1,0 +1,25 @@
+[package]
+name = "device-app"
+description = "The native TinyThing program that draws the Device's screen; on the computer it runs as the Simulator."
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+publish.workspace = true
+
+[dependencies]
+clap.workspace = true
+protocol.workspace = true
+slint.workspace = true
+tokio = { workspace = true, features = ["io-util", "macros", "net", "rt", "time"] }
+tracing.workspace = true
+tracing-subscriber.workspace = true
+
+[build-dependencies]
+slint-build.workspace = true
+
+[dev-dependencies]
+i-slint-backend-testing.workspace = true
+
+[lints]
+workspace = true
