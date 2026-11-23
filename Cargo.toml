@@ -1,0 +1,33 @@
+[workspace]
+resolver = "3"
+members = ["crates/protocol", "crates/tray", "crates/device-daemon", "crates/device-app"]
+
+[workspace.package]
+version = "0.1.0"
+edition = "2024"
+license = "GPL-3.0-only"
+repository = "https://github.com/Jan-Eric-B/tiny-thing"
+publish = false
+
+[workspace.dependencies]
+protocol = { path = "crates/protocol" }
+device-daemon = { path = "crates/device-daemon" }
+
+clap = { version = "4.6.9", features = ["derive"] }
+futures-util = { version = "0.3.34", default-features = false, features = ["sink"] }
+i-slint-backend-testing = "1.19.0"
+postcard = { version = "1.2.0", default-features = false, features = ["use-std"] }
+serde = { version = "1.0.229", features = ["derive"] }
+slint = "1.19.0"
+slint-build = "1.19.0"
+thiserror = "2.0.21"
+tokio = "1.54.1"
+tokio-util = "0.7.20"
+tracing = "0.1.44"
+tracing-subscriber = { version = "0.3.23", features = ["env-filter"] }
+
+[workspace.lints.rust]
+unsafe_code = "deny"
+
+[workspace.lints.clippy]
+unwrap_used = "warn"
