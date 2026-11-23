@@ -1,0 +1,27 @@
+[package]
+name = "tray"
+description = "The Tray app. Its library is the Tray core: all logic, no UI."
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+publish.workspace = true
+
+[dependencies]
+protocol.workspace = true
+thiserror.workspace = true
+tokio = { workspace = true, features = ["io-util", "macros", "net", "sync"] }
+tracing.workspace = true
+
+[dev-dependencies]
+clap.workspace = true
+device-daemon.workspace = true
+tokio = { workspace = true, features = ["io-util", "macros", "net", "rt-multi-thread", "signal", "sync", "test-util", "time"] }
+tracing-subscriber.workspace = true
+
+[[example]]
+name = "fake-now-playing"
+path = "examples/fake_now_playing.rs"
+
+[lints]
+workspace = true
