@@ -20,7 +20,7 @@ mod version;
 
 pub use frame::{FrameError, MAX_FRAME_LEN, MessageReader, MessageWriter};
 pub use handshake::{HANDSHAKE_TIMEOUT, Handshake, HandshakeError};
-pub use message::{DeviceMessage, NowPlaying, TrayMessage};
+pub use message::{DeviceMessage, InputAction, NowPlaying, PlaybackState, TrayMessage};
 pub use version::{PROTOCOL_VERSION, ProtocolVersion, SoftwareVersion};
 
 /// The TCP port the Device daemon listens on for the Tray app.

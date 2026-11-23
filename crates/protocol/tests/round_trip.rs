@@ -5,8 +5,8 @@
 
 use protocol::local::{AppMessage, DaemonMessage};
 use protocol::{
-    DeviceMessage, Handshake, MessageReader, MessageWriter, NowPlaying, PROTOCOL_VERSION,
-    ProtocolVersion, SoftwareVersion, TrayMessage,
+    DeviceMessage, Handshake, InputAction, MessageReader, MessageWriter, NowPlaying,
+    PROTOCOL_VERSION, PlaybackState, ProtocolVersion, SoftwareVersion, TrayMessage,
 };
 use serde::Serialize;
 use serde::de::DeserializeOwned;
@@ -16,7 +16,25 @@ fn now_playing(title: &str, artist: &str) -> NowPlaying {
     NowPlaying {
         title: title.to_owned(),
         artist: artist.to_owned(),
+        playback: PlaybackState::Playing,
     }
+}
+
+/// Every input action. The exhaustive match makes adding an action without
+/// listing it here a compile error.
+fn all_input_actions() -> Vec<InputAction> {
+    fn covered(action: InputAction) {
+        match action {
+            InputAction::PlayPause | InputAction::Previous | InputAction::Next => {}
+        }
+    }
+    let actions = vec![
+        InputAction::PlayPause,
+        InputAction::Previous,
+        InputAction::Next,
+    ];
+    actions.iter().copied().for_each(covered);
+    actions
 }
 
 /// One sample per variant, plus edge cases. The exhaustive match makes adding a
@@ -35,6 +53,10 @@ fn tray_message_samples() -> Vec<TrayMessage> {
             "日本語のアーティスト",
         ))),
         TrayMessage::NowPlaying(Some(now_playing(&"long ".repeat(10_000), "x"))),
+        TrayMessage::NowPlaying(Some(NowPlaying {
+            playback: PlaybackState::Paused,
+            ..now_playing("Teardrop", "Massive Attack")
+        })),
         TrayMessage::NowPlaying(None),
     ];
     samples.iter().for_each(covered);
@@ -43,9 +65,14 @@ fn tray_message_samples() -> Vec<TrayMessage> {
 
 fn device_message_samples() -> Vec<DeviceMessage> {
     fn covered(message: &DeviceMessage) {
-        match *message {}
+        match message {
+            DeviceMessage::Input(_) => {}
+        }
     }
-    let samples: Vec<DeviceMessage> = Vec::new();
+    let samples: Vec<DeviceMessage> = all_input_actions()
+        .into_iter()
+        .map(DeviceMessage::Input)
+        .collect();
     samples.iter().for_each(covered);
     samples
 }
@@ -58,6 +85,10 @@ fn daemon_message_samples() -> Vec<DaemonMessage> {
     }
     let samples = vec![
         DaemonMessage::NowPlaying(Some(now_playing("Windowlicker", "Aphex Twin"))),
+        DaemonMessage::NowPlaying(Some(NowPlaying {
+            playback: PlaybackState::Paused,
+            ..now_playing("Windowlicker", "Aphex Twin")
+        })),
         DaemonMessage::NowPlaying(None),
     ];
     samples.iter().for_each(covered);
@@ -66,9 +97,14 @@ fn daemon_message_samples() -> Vec<DaemonMessage> {
 
 fn app_message_samples() -> Vec<AppMessage> {
     fn covered(message: &AppMessage) {
-        match *message {}
+        match message {
+            AppMessage::Input(_) => {}
+        }
     }
-    let samples: Vec<AppMessage> = Vec::new();
+    let samples: Vec<AppMessage> = all_input_actions()
+        .into_iter()
+        .map(AppMessage::Input)
+        .collect();
     samples.iter().for_each(covered);
     samples
 }

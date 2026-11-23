@@ -7,8 +7,8 @@
 
 use protocol::{
     DeviceMessage, FrameError, HANDSHAKE_TIMEOUT, Handshake, HandshakeError, MAX_FRAME_LEN,
-    MessageReader, MessageWriter, NowPlaying, PROTOCOL_VERSION, ProtocolVersion, SoftwareVersion,
-    TrayMessage,
+    MessageReader, MessageWriter, NowPlaying, PROTOCOL_VERSION, PlaybackState, ProtocolVersion,
+    SoftwareVersion, TrayMessage,
 };
 use std::time::Duration;
 use tokio::io::AsyncWriteExt;
@@ -62,6 +62,7 @@ async fn a_receive_cancelled_halfway_through_a_frame_loses_nothing() {
     let message = TrayMessage::NowPlaying(Some(NowPlaying {
         title: "Teardrop".to_owned(),
         artist: "Massive Attack".to_owned(),
+        playback: PlaybackState::Playing,
     }));
     let bytes = frame(&postcard::to_allocvec(&message).unwrap());
     let (mut near, far) = tokio::io::duplex(64 * 1024);
