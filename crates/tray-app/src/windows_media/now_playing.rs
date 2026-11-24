@@ -1,7 +1,7 @@
 //! Turns what Windows reports about the current Media session into Now
 //! Playing. Pure, so the rules are tested without Windows media players.
 
-use tray_core::media::{Artwork, NowPlaying, PlaybackState};
+use tray_core::media::{Artwork, NowPlaying, PlaybackState, Progress};
 use windows::Media::Control::GlobalSystemMediaTransportControlsSessionPlaybackStatus as PlaybackStatus;
 
 /// What the current Media session reports about what it plays, as read from
@@ -14,6 +14,8 @@ pub struct MediaProperties {
     pub playback_status: PlaybackStatus,
     /// `None` when the session supplies none.
     pub artwork: Option<Artwork>,
+    /// `None` when the session reports no duration.
+    pub progress: Option<Progress>,
 }
 
 /// Now Playing for the Media session Windows marks as current, given its
@@ -37,13 +39,14 @@ pub fn now_playing(current: Option<MediaProperties>) -> Option<NowPlaying> {
         artist: artist.to_owned(),
         playback: playback_state(properties.playback_status),
         artwork: properties.artwork,
+        progress: properties.progress,
     })
 }
 
 /// Only a session that Windows reports as playing counts as playing. Every
 /// other status (paused, stopped, opened, closed, changing between songs)
 /// shows as paused, so the Device offers to play.
-fn playback_state(status: PlaybackStatus) -> PlaybackState {
+pub fn playback_state(status: PlaybackStatus) -> PlaybackState {
     if status == PlaybackStatus::Playing {
         PlaybackState::Playing
     } else {
@@ -62,6 +65,7 @@ mod tests {
             album_artist: album_artist.to_owned(),
             playback_status: PlaybackStatus::Playing,
             artwork: None,
+            progress: None,
         }
     }
 
@@ -71,6 +75,7 @@ mod tests {
             artist: artist.to_owned(),
             playback: PlaybackState::Playing,
             artwork: None,
+            progress: None,
         })
     }
 

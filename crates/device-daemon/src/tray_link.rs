@@ -1,6 +1,6 @@
 //! The connection to the Tray app.
 
-use crate::{ArtworkNews, DEVICE_DAEMON_VERSION, State, newest_connection};
+use crate::{Arrived, ArtworkNews, DEVICE_DAEMON_VERSION, State, newest_connection};
 use protocol::{
     ArtworkId, DeviceMessage, FrameError, Handshake, HandshakeError, InputAction, MessageReader,
     MessageWriter, TrayMessage,
@@ -114,7 +114,7 @@ async fn receive_from_tray(
         match message {
             TrayMessage::NowPlaying(current) => {
                 let id = current.as_ref().and_then(|now_playing| now_playing.artwork);
-                state.now_playing.send_replace(current);
+                state.now_playing.send_replace(current.map(Arrived::new));
                 let Some(id) = id else { continue };
                 let kept = state.artworks().get(id);
                 match kept {
@@ -164,6 +164,6 @@ fn names(state: &State, id: ArtworkId) -> bool {
         .now_playing
         .borrow()
         .as_ref()
-        .and_then(|now_playing| now_playing.artwork)
+        .and_then(|arrived| arrived.now_playing.artwork)
         == Some(id)
 }

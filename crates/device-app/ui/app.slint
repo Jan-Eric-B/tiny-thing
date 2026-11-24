@@ -124,6 +124,67 @@ component VolumeIndicator inherits Rectangle {
     }
 }
 
+// How far into the song playback is: a bar in the Accent with the position
+// and the duration below it. A tap on the bar seeks there, when the Media
+// session can seek; the bar's touch target is taller than the bar.
+component ProgressBar {
+    in property <float> progress;
+    in property <string> position-text;
+    in property <string> duration-text;
+    in property <bool> can-seek;
+    in property <color> accent;
+    // A tap at this fraction of the way along, from 0 to 1.
+    callback seek(float);
+
+    VerticalLayout {
+        spacing: 2px;
+
+        Rectangle {
+            height: 32px;
+            accessible-role: progress-indicator;
+            accessible-label: "Progress";
+            accessible-value: root.position-text;
+
+            // The track.
+            Rectangle {
+                y: (parent.height - self.height) / 2;
+                height: 6px;
+                border-radius: self.height / 2;
+                background: #ffffff40;
+
+                Rectangle {
+                    x: 0;
+                    width: parent.width * clamp(root.progress, 0, 1);
+                    border-radius: parent.border-radius;
+                    background: root.accent;
+                }
+            }
+
+            TouchArea {
+                enabled: root.can-seek;
+                clicked => {
+                    root.seek(clamp(self.pressed-x / self.width, 0, 1));
+                }
+            }
+        }
+
+        HorizontalLayout {
+            Text {
+                text: root.position-text;
+                color: #ffffff;
+                font-size: 20px;
+            }
+
+            Text {
+                text: root.duration-text;
+                color: #ffffff;
+                font-size: 20px;
+                horizontal-alignment: right;
+            }
+        }
+    }
+}
+
 // A round control. Every control has the same touch target, however large
 // its circle is drawn, so a row of them lines up. Pressed, the circle and its
 // icon shrink a little; the circle keeps its color, so the icon never stands
@@ -194,11 +255,22 @@ export component AppWindow inherits Window {
     in property <bool> artwork-shown;
     in property <image> artwork;
     in property <image> backdrop;
-    // For the icons; white without Artwork.
+    // For the icons and the progress bar; white without Artwork.
     in property <color> accent: #ffffff;
+    // Whether Now Playing has a duration; the progress bar shows only then.
+    in property <bool> has-progress;
+    // How much of the song has played, from 0 to 1, and the position and
+    // duration as a clock shows them.
+    in property <float> progress;
+    in property <string> position-text;
+    in property <string> duration-text;
+    // Whether a tap on the progress bar seeks.
+    in property <bool> can-seek;
 
     callback device-input(DeviceInput);
     callback touch-control(TouchControl);
+    // The progress bar was tapped at this fraction of the way along.
+    callback seek(float);
 
     title: "TinyThing Simulator";
     width: 800px;
@@ -326,8 +398,19 @@ export component AppWindow inherits Window {
                         overflow: elide;
                     }
 
+                    if root.has-now-playing && root.has-progress: ProgressBar {
+                        progress: root.progress;
+                        position-text: root.position-text;
+                        duration-text: root.duration-text;
+                        can-seek: root.can-seek;
+                        accent: root.accent;
+                        seek(fraction) => {
+                            root.seek(fraction);
+                        }
+                    }
+
                     if root.has-now-playing: HorizontalLayout {
-                        padding-top: 24px;
+                        padding-top: 12px;
                         // Three controls fill the text beside the Artwork
                         // exactly.
                         spacing: root.has-artwork ? 8px : 16px;

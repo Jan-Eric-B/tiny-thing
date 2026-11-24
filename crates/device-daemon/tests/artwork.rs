@@ -57,6 +57,7 @@ fn now_playing(title: &str, artwork: Option<u64>) -> Option<NowPlaying> {
         artist: "Massive Attack".to_owned(),
         playback: PlaybackState::Playing,
         artwork: artwork.map(ArtworkId),
+        progress: None,
     })
 }
 
@@ -235,6 +236,7 @@ async fn artwork_is_asked_for_once_however_often_now_playing_changes() {
             artist: "Massive Attack".to_owned(),
             playback: PlaybackState::Paused,
             artwork: Some(ArtworkId(1)),
+            progress: None,
         })))
         .await;
     tray_app.send(playing("Teardrop", Some(1))).await;

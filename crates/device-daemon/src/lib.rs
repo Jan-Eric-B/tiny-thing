@@ -19,6 +19,7 @@ use std::net::SocketAddr;
 use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
 use tokio::net::TcpListener;
 use tokio::sync::{broadcast, watch};
+use tokio::time::Instant;
 
 /// How many input actions may wait for the Tray app link before the oldest
 /// are dropped. Far more than anyone presses while one message goes out.
@@ -77,7 +78,8 @@ impl DeviceDaemon {
     /// replaces the one before it.
     ///
     /// Now Playing, its Artwork and the Volume are kept and handed to every
-    /// new Device app connection. The last [`ARTWORK_CACHE_LEN`] Artworks are
+    /// new Device app connection, Now Playing with its position moved on to
+    /// the moment it is handed over. The last [`ARTWORK_CACHE_LEN`] Artworks are
     /// kept across Tray app connections; the Tray app is asked only for
     /// Artwork not among them.
     /// Input actions are not kept: one that arrives while no Tray app is
@@ -102,7 +104,7 @@ impl DeviceDaemon {
 /// The latest state the Tray app reported, kept for the Device app.
 #[derive(Debug, Clone)]
 struct State {
-    now_playing: watch::Sender<Option<NowPlaying>>,
+    now_playing: watch::Sender<Option<Arrived>>,
     volume: watch::Sender<Option<Volume>>,
     /// The Artwork of Now Playing once it is here, or word that it cannot
     /// be had; may still be about an earlier Now Playing, which the Device
@@ -114,9 +116,31 @@ struct State {
 /// A view of [`State`] that follows its changes.
 #[derive(Debug, Clone)]
 struct StateView {
-    now_playing: watch::Receiver<Option<NowPlaying>>,
+    now_playing: watch::Receiver<Option<Arrived>>,
     volume: watch::Receiver<Option<Volume>>,
     artwork: watch::Receiver<Option<ArtworkNews>>,
+}
+
+/// Now Playing as the Tray app reported it, and when it arrived.
+#[derive(Debug, Clone)]
+struct Arrived {
+    now_playing: NowPlaying,
+    at: Instant,
+}
+
+impl Arrived {
+    fn new(now_playing: NowPlaying) -> Self {
+        Self {
+            now_playing,
+            at: Instant::now(),
+        }
+    }
+
+    /// Now Playing as it is now: a Device app that starts later gets the
+    /// position playback has got to since, not the one that arrived.
+    fn now(&self) -> NowPlaying {
+        self.now_playing.clone().aged(self.at.elapsed())
+    }
 }
 
 /// What the Device daemon knows about the Artwork of Now Playing.

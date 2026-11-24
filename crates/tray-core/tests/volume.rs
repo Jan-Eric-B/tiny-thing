@@ -49,6 +49,7 @@ async fn connected(
         artist: "Massive Attack".to_owned(),
         playback: PlaybackState::Playing,
         artwork: None,
+        progress: None,
     }));
     let computer = FakeVolumeControl::new(start);
     let session = Session::connect(daemon.tray_address).await.unwrap();

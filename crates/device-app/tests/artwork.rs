@@ -35,6 +35,7 @@ impl Harness {
             artist: "Massive Attack".to_owned(),
             playback: PlaybackState::Playing,
             artwork: artwork.map(ArtworkId),
+            progress: None,
         })));
     }
 

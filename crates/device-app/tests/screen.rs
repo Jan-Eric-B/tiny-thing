@@ -97,6 +97,7 @@ impl Harness {
             artist: "Massive Attack".to_owned(),
             playback,
             artwork: None,
+            progress: None,
         })));
     }
 }

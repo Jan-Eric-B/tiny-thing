@@ -6,11 +6,12 @@
 
 mod support;
 
+use protocol::PlaybackRate;
 use protocol::local::DaemonMessage;
 use std::time::Duration;
 use support::{PATIENCE, RecordingDeviceApp, RunningDaemon, start_device_daemon};
 use tokio::time::Instant;
-use tray_core::media::{FakeMediaSource, NowPlaying, PlaybackState};
+use tray_core::media::{FakeMediaSource, NowPlaying, PlaybackState, Progress};
 use tray_core::volume::FakeVolumeControl;
 use tray_core::{NOTHING_PLAYING_HOLD, Session};
 
@@ -20,6 +21,7 @@ fn song(title: &str, artist: &str) -> NowPlaying {
         artist: artist.to_owned(),
         playback: PlaybackState::Playing,
         artwork: None,
+        progress: None,
     }
 }
 
@@ -29,6 +31,7 @@ fn shown(title: &str, artist: &str) -> DaemonMessage {
         artist: artist.to_owned(),
         playback: protocol::PlaybackState::Playing,
         artwork: None,
+        progress: None,
     }))
 }
 
@@ -122,7 +125,7 @@ async fn pausing_and_playing_reach_the_device_app() {
     device_app
         .wait_for(&DaemonMessage::NowPlaying(Some(protocol::NowPlaying {
             playback: protocol::PlaybackState::Paused,
-            ..protocol::NowPlaying::from(&song("Teardrop", "Massive Attack"))
+            ..song("Teardrop", "Massive Attack").to_device(tokio::time::Instant::now())
         })))
         .await;
 
@@ -256,4 +259,258 @@ async fn a_new_title_while_nothing_playing_is_held_back_goes_out_at_once_and_end
 
     tokio::time::advance(NOTHING_PLAYING_HOLD).await;
     assert_no_now_playing_went_out(&mut device_app, &volume).await;
+}
+
+/// "Teardrop" (5:31), at `position` seconds now, playing or paused.
+fn teardrop_at(position: f64, playback: PlaybackState) -> NowPlaying {
+    teardrop_at_rate(position, playback, PlaybackRate::NORMAL)
+}
+
+/// "Teardrop" (5:31), at `position` seconds now, playing or paused at
+/// `rate`.
+fn teardrop_at_rate(position: f64, playback: PlaybackState, rate: PlaybackRate) -> NowPlaying {
+    NowPlaying {
+        playback,
+        progress: Some(Progress {
+            taken: protocol::Progress::new(
+                Duration::from_secs_f64(position),
+                Duration::from_secs(331),
+                rate,
+                true,
+            )
+            .unwrap(),
+            at: Instant::now(),
+        }),
+        ..song("Teardrop", "Massive Attack")
+    }
+}
+
+/// The position of the next Now Playing with something playing that the
+/// Device app receives.
+async fn next_position(device_app: &mut RecordingDeviceApp) -> Option<Duration> {
+    next_progress(device_app)
+        .await
+        .map(|progress| progress.position())
+}
+
+/// The progress of the next Now Playing with something playing that the
+/// Device app receives.
+async fn next_progress(device_app: &mut RecordingDeviceApp) -> Option<protocol::Progress> {
+    let next = device_app
+        .wait_until("something playing", |message| {
+            matches!(message, DaemonMessage::NowPlaying(Some(_)))
+        })
+        .await;
+    match next {
+        DaemonMessage::NowPlaying(Some(now_playing)) => now_playing.progress,
+        _ => unreachable!("matched above"),
+    }
+}
+
+/// Starts a session once `media` has played for a while.
+async fn start_session(media: &FakeMediaSource) -> (RunningDaemon, RecordingDeviceApp) {
+    let daemon = start_device_daemon().await;
+    let device_app = RecordingDeviceApp::connect(daemon.app_address).await;
+    let session = Session::connect(daemon.tray_address).await.unwrap();
+    let media = media.clone();
+    tokio::spawn(async move { session.run(&media, &FakeVolumeControl::default()).await });
+    (daemon, device_app)
+}
+
+#[tokio::test(start_paused = true)]
+async fn the_device_gets_the_position_as_it_is_when_sent_not_as_it_was_reported() {
+    let _still = keep_clock_still();
+    let media = FakeMediaSource::new();
+    // A browser that reported the position once and has played on since.
+    media.set(Some(teardrop_at(40.0, PlaybackState::Playing)));
+    tokio::time::advance(Duration::from_secs(30)).await;
+
+    let (_daemon, mut device_app) = start_session(&media).await;
+
+    assert_eq!(
+        next_position(&mut device_app).await,
+        Some(Duration::from_secs(70))
+    );
+}
+
+#[tokio::test(start_paused = true)]
+async fn a_paused_position_stays_where_it_was_reported() {
+    let _still = keep_clock_still();
+    let media = FakeMediaSource::new();
+    media.set(Some(teardrop_at(40.0, PlaybackState::Paused)));
+    tokio::time::advance(Duration::from_secs(30)).await;
+
+    let (_daemon, mut device_app) = start_session(&media).await;
+
+    assert_eq!(
+        next_position(&mut device_app).await,
+        Some(Duration::from_secs(40))
+    );
+}
+
+#[tokio::test(start_paused = true)]
+async fn a_position_report_that_agrees_with_the_device_is_not_sent_again() {
+    let _still = keep_clock_still();
+    let (_daemon, mut device_app, media, volume) = playing().await;
+    media.set(Some(teardrop_at(40.0, PlaybackState::Playing)));
+    assert_eq!(
+        next_position(&mut device_app).await,
+        Some(Duration::from_secs(40))
+    );
+
+    // Ten seconds on, the player reports where the Device has got to by
+    // itself, give or take a little.
+    tokio::time::advance(Duration::from_secs(10)).await;
+    media.set(Some(teardrop_at(50.4, PlaybackState::Playing)));
+    session_takes_it_in().await;
+    assert_no_now_playing_went_out(&mut device_app, &volume).await;
+
+    // A position elsewhere (a seek on the computer) goes out.
+    media.set(Some(teardrop_at(120.0, PlaybackState::Playing)));
+    assert_eq!(
+        next_position(&mut device_app).await,
+        Some(Duration::from_secs(120))
+    );
+}
+
+#[tokio::test(start_paused = true)]
+async fn a_new_position_while_paused_goes_out() {
+    let _still = keep_clock_still();
+    let (_daemon, mut device_app, media, _volume) = playing().await;
+    media.set(Some(teardrop_at(40.0, PlaybackState::Paused)));
+    assert_eq!(
+        next_position(&mut device_app).await,
+        Some(Duration::from_secs(40))
+    );
+
+    tokio::time::advance(Duration::from_secs(10)).await;
+    media.set(Some(teardrop_at(45.0, PlaybackState::Paused)));
+
+    assert_eq!(
+        next_position(&mut device_app).await,
+        Some(Duration::from_secs(45))
+    );
+}
+
+#[tokio::test(start_paused = true)]
+async fn the_same_song_after_nothing_playing_went_out_is_sent_again() {
+    let _still = keep_clock_still();
+    let (_daemon, mut device_app, media, _volume) = playing().await;
+    media.set(Some(teardrop_at(40.0, PlaybackState::Paused)));
+    assert_eq!(
+        next_position(&mut device_app).await,
+        Some(Duration::from_secs(40))
+    );
+    media.set(None);
+    session_takes_it_in().await;
+    tokio::time::advance(NOTHING_PLAYING_HOLD).await;
+    assert_eq!(
+        next_now_playing(&mut device_app).await,
+        DaemonMessage::NowPlaying(None)
+    );
+
+    // The player comes back with the same song, paused where it was.
+    media.set(Some(teardrop_at(40.0, PlaybackState::Paused)));
+
+    assert_eq!(
+        next_position(&mut device_app).await,
+        Some(Duration::from_secs(40))
+    );
+}
+
+#[tokio::test(start_paused = true)]
+async fn the_same_song_back_within_the_hold_where_the_device_has_got_to_is_not_sent_again() {
+    let _still = keep_clock_still();
+    let (_daemon, mut device_app, media, volume) = playing().await;
+    media.set(Some(teardrop_at(40.0, PlaybackState::Playing)));
+    assert_eq!(
+        next_position(&mut device_app).await,
+        Some(Duration::from_secs(40))
+    );
+
+    media.set(None);
+    session_takes_it_in().await;
+    tokio::time::advance(Duration::from_millis(200)).await;
+    media.set(Some(teardrop_at(40.2, PlaybackState::Playing)));
+    session_takes_it_in().await;
+    tokio::time::advance(NOTHING_PLAYING_HOLD).await;
+
+    assert_no_now_playing_went_out(&mut device_app, &volume).await;
+}
+
+#[tokio::test(start_paused = true)]
+async fn a_pause_where_the_device_has_got_to_goes_out() {
+    let _still = keep_clock_still();
+    let (_daemon, mut device_app, media, _volume) = playing().await;
+    media.set(Some(teardrop_at(40.0, PlaybackState::Playing)));
+    assert_eq!(
+        next_position(&mut device_app).await,
+        Some(Duration::from_secs(40))
+    );
+
+    tokio::time::advance(Duration::from_millis(500)).await;
+    media.set(Some(teardrop_at(40.5, PlaybackState::Paused)));
+
+    let next = next_now_playing(&mut device_app).await;
+    let DaemonMessage::NowPlaying(Some(paused)) = next else {
+        panic!("expected something playing, got {next:?}");
+    };
+    assert_eq!(paused.playback, protocol::PlaybackState::Paused);
+}
+
+#[tokio::test(start_paused = true)]
+async fn a_faster_playback_rate_moves_the_position_on_faster() {
+    let _still = keep_clock_still();
+    let media = FakeMediaSource::new();
+    // A podcast at 1.5x, reported 30 s ago.
+    let faster = PlaybackRate::from_f64(1.5).unwrap();
+    media.set(Some(teardrop_at_rate(40.0, PlaybackState::Playing, faster)));
+    tokio::time::advance(Duration::from_secs(30)).await;
+
+    let (_daemon, mut device_app) = start_session(&media).await;
+
+    let progress = next_progress(&mut device_app).await.unwrap();
+    assert_eq!(progress.position(), Duration::from_secs(85));
+    assert_eq!(progress.rate(), faster);
+}
+
+#[tokio::test(start_paused = true)]
+async fn a_report_at_a_faster_rate_that_agrees_with_the_device_is_not_sent_again() {
+    let _still = keep_clock_still();
+    let (_daemon, mut device_app, media, volume) = playing().await;
+    let faster = PlaybackRate::from_f64(2.0).unwrap();
+    media.set(Some(teardrop_at_rate(40.0, PlaybackState::Playing, faster)));
+    assert_eq!(
+        next_position(&mut device_app).await,
+        Some(Duration::from_secs(40))
+    );
+
+    // Ten seconds at 2x: the Device has got to 60 s by itself.
+    tokio::time::advance(Duration::from_secs(10)).await;
+    media.set(Some(teardrop_at_rate(60.4, PlaybackState::Playing, faster)));
+    session_takes_it_in().await;
+
+    assert_no_now_playing_went_out(&mut device_app, &volume).await;
+}
+
+#[tokio::test(start_paused = true)]
+async fn a_change_of_playback_rate_goes_out_at_once() {
+    let _still = keep_clock_still();
+    let (_daemon, mut device_app, media, _volume) = playing().await;
+    media.set(Some(teardrop_at(40.0, PlaybackState::Playing)));
+    assert_eq!(
+        next_position(&mut device_app).await,
+        Some(Duration::from_secs(40))
+    );
+
+    tokio::time::advance(Duration::from_millis(500)).await;
+    let faster = PlaybackRate::from_f64(1.5).unwrap();
+    media.set(Some(teardrop_at_rate(40.5, PlaybackState::Playing, faster)));
+
+    assert_eq!(
+        next_progress(&mut device_app)
+            .await
+            .map(|progress| progress.rate()),
+        Some(faster)
+    );
 }

@@ -25,11 +25,12 @@ fn song(title: &str) -> NowPlaying {
         artist: "Massive Attack".to_owned(),
         playback: PlaybackState::Playing,
         artwork: None,
+        progress: None,
     }
 }
 
 fn shown(title: &str) -> DaemonMessage {
-    DaemonMessage::NowPlaying(Some(protocol::NowPlaying::from(&song(title))))
+    DaemonMessage::NowPlaying(Some(song(title).to_device(tokio::time::Instant::now())))
 }
 
 /// A Device daemon with a recording Device app and a running session. Returns
@@ -95,6 +96,21 @@ async fn each_input_action_arrives_as_the_matching_media_source_call() {
             TransportControl::Previous,
             TransportControl::Next,
         ],
+    )
+    .await;
+}
+
+#[tokio::test]
+async fn a_seek_from_the_device_arrives_as_a_seek_to_the_same_position() {
+    let (_daemon, mut device_app, media, _running) = connected().await;
+
+    device_app
+        .send(InputAction::Seek(Duration::from_millis(83_250)))
+        .await;
+
+    assert_calls(
+        &media,
+        &[TransportControl::Seek(Duration::from_millis(83_250))],
     )
     .await;
 }
@@ -203,4 +219,38 @@ async fn after_a_new_session_replaces_the_old_one_presses_reach_only_the_new_one
         "{old_result:?}"
     );
     assert_eq!(*old_media.calls().borrow(), [], "old session's calls");
+}
+
+#[tokio::test]
+async fn of_seeks_during_a_stalled_control_the_last_one_is_carried_out() {
+    let (_daemon, mut device_app, media, _running) = connected().await;
+    media.stall_controls(true);
+    device_app.send(InputAction::Next).await;
+    assert_calls(&media, &[TransportControl::Next]).await;
+
+    // Taps along the progress bar while the player hangs: the last one is
+    // where the user wants to be.
+    for seconds in [10, 20, 30] {
+        device_app
+            .send(InputAction::Seek(Duration::from_secs(seconds)))
+            .await;
+    }
+    tokio::time::sleep(SETTLE).await;
+    media.stall_controls(false);
+
+    assert_calls(
+        &media,
+        &[
+            TransportControl::Next,
+            TransportControl::Seek(Duration::from_secs(30)),
+        ],
+    )
+    .await;
+    tokio::time::sleep(SETTLE).await;
+    assert_eq!(
+        media.calls().borrow().len(),
+        2,
+        "{:?}",
+        media.calls().borrow()
+    );
 }

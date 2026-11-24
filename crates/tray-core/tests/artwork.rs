@@ -55,6 +55,7 @@ fn song(title: &str, artwork: Option<Artwork>) -> NowPlaying {
         artist: "Massive Attack".to_owned(),
         playback: PlaybackState::Playing,
         artwork,
+        progress: None,
     }
 }
 

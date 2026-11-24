@@ -23,11 +23,12 @@ fn teardrop() -> NowPlaying {
         artist: "Massive Attack".to_owned(),
         playback: PlaybackState::Playing,
         artwork: None,
+        progress: None,
     }
 }
 
 fn teardrop_shown() -> DaemonMessage {
-    DaemonMessage::NowPlaying(Some(protocol::NowPlaying::from(&teardrop())))
+    DaemonMessage::NowPlaying(Some(teardrop().to_device(tokio::time::Instant::now())))
 }
 
 #[tokio::test]

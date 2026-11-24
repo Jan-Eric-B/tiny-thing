@@ -15,7 +15,9 @@ pub struct ProtocolVersion(pub u16);
 ///    not have, and the Tray app sends it.
 /// 5: the Tray app says when it cannot make the Artwork asked for; Artwork
 ///    is checked against the screen and Artwork box sizes when it is read.
-pub const PROTOCOL_VERSION: ProtocolVersion = ProtocolVersion(5);
+/// 6: Now Playing carries the position, duration, playback rate and whether
+///    it can seek; the Device sends seeks.
+pub const PROTOCOL_VERSION: ProtocolVersion = ProtocolVersion(6);
 
 impl fmt::Display for ProtocolVersion {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {

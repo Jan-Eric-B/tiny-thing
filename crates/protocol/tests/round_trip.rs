@@ -6,12 +6,13 @@
 use protocol::local::{AppMessage, DaemonMessage};
 use protocol::{
     Artwork, ArtworkId, DeviceMessage, Handshake, Image, InputAction, MessageReader, MessageWriter,
-    NowPlaying, PROTOCOL_VERSION, Percent, PlaybackState, ProtocolVersion, Rgb, RgbPixels,
-    SoftwareVersion, TrayMessage, Volume,
+    NowPlaying, PROTOCOL_VERSION, Percent, PlaybackRate, PlaybackState, Progress, ProtocolVersion,
+    Rgb, RgbPixels, SoftwareVersion, TrayMessage, Volume,
 };
 use serde::Serialize;
 use serde::de::DeserializeOwned;
 use std::fmt::Debug;
+use std::time::Duration;
 
 fn percent(value: u8) -> Percent {
     Percent::try_from(value).unwrap()
@@ -23,6 +24,15 @@ fn now_playing(title: &str, artist: &str) -> NowPlaying {
         artist: artist.to_owned(),
         playback: PlaybackState::Playing,
         artwork: Some(ArtworkId(0x0123_4567_89ab_cdef)),
+        progress: Some(
+            Progress::new(
+                Duration::from_millis(83_250),
+                Duration::from_secs(331),
+                PlaybackRate::NORMAL,
+                true,
+            )
+            .unwrap(),
+        ),
     }
 }
 
@@ -59,7 +69,8 @@ fn all_input_actions() -> Vec<InputAction> {
             | InputAction::Previous
             | InputAction::Next
             | InputAction::VolumeUp
-            | InputAction::VolumeDown => {}
+            | InputAction::VolumeDown
+            | InputAction::Seek(_) => {}
         }
     }
     let actions = vec![
@@ -68,6 +79,8 @@ fn all_input_actions() -> Vec<InputAction> {
         InputAction::Next,
         InputAction::VolumeUp,
         InputAction::VolumeDown,
+        InputAction::Seek(Duration::ZERO),
+        InputAction::Seek(Duration::from_nanos(123_456_789_012)),
     ];
     actions.iter().copied().for_each(covered);
     actions
@@ -99,6 +112,22 @@ fn tray_message_samples() -> Vec<TrayMessage> {
         TrayMessage::NowPlaying(Some(NowPlaying {
             artwork: None,
             ..now_playing("Teardrop", "Massive Attack")
+        })),
+        TrayMessage::NowPlaying(Some(NowPlaying {
+            progress: None,
+            ..now_playing("Radio 1", "")
+        })),
+        TrayMessage::NowPlaying(Some(NowPlaying {
+            progress: Some(
+                Progress::new(
+                    Duration::ZERO,
+                    Duration::from_secs(10 * 3600),
+                    PlaybackRate::from_f64(1.5).unwrap(),
+                    false,
+                )
+                .unwrap(),
+            ),
+            ..now_playing("Lecture 3", "")
         })),
         TrayMessage::NowPlaying(None),
         TrayMessage::Artwork(artwork(1)),

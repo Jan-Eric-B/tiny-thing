@@ -1,6 +1,6 @@
 //! The local socket to the Device app.
 
-use crate::{ArtworkNews, StateView, newest_connection};
+use crate::{Arrived, ArtworkNews, StateView, newest_connection};
 use protocol::local::{AppMessage, DaemonMessage};
 use protocol::{FrameError, InputAction, MessageReader, MessageWriter};
 use tokio::net::tcp::{OwnedReadHalf, OwnedWriteHalf};
@@ -54,7 +54,7 @@ async fn send_to_app(
         let message = tokio::select! {
             changed = state.now_playing.changed() => {
                 changed.map_err(|_| AppLinkError::StateClosed)?;
-                DaemonMessage::NowPlaying(state.now_playing.borrow_and_update().clone())
+                DaemonMessage::NowPlaying(state.now_playing.borrow_and_update().as_ref().map(Arrived::now))
             }
             changed = state.volume.changed() => {
                 changed.map_err(|_| AppLinkError::StateClosed)?;

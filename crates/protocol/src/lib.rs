@@ -18,6 +18,7 @@ mod handshake;
 pub mod local;
 mod message;
 mod percent;
+mod progress;
 mod version;
 
 pub use artwork::{
@@ -28,6 +29,7 @@ pub use frame::{FrameError, MAX_FRAME_LEN, MessageReader, MessageWriter};
 pub use handshake::{HANDSHAKE_TIMEOUT, Handshake, HandshakeError};
 pub use message::{DeviceMessage, InputAction, NowPlaying, PlaybackState, TrayMessage, Volume};
 pub use percent::{AbovePercentRange, Percent};
+pub use progress::{MAX_DURATION, OutOfRateRange, PlaybackRate, Progress, ProgressError};
 pub use version::{PROTOCOL_VERSION, ProtocolVersion, SoftwareVersion};
 
 /// The TCP port the Device daemon listens on for the Tray app.

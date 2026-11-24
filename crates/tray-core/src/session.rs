@@ -10,18 +10,16 @@ use protocol::{
     ArtworkId, DeviceMessage, FrameError, Handshake, HandshakeError, InputAction, MessageReader,
     MessageWriter, TrayMessage,
 };
+use std::convert::Infallible;
 use std::io;
 use std::net::SocketAddr;
+use std::sync::{Mutex, MutexGuard, PoisonError};
 use std::time::Duration;
 use tokio::net::TcpStream;
 use tokio::net::tcp::{OwnedReadHalf, OwnedWriteHalf};
 use tokio::sync::mpsc::error::TrySendError;
-use tokio::sync::{mpsc, watch};
+use tokio::sync::{Notify, mpsc, watch};
 use tokio::time::Instant;
-
-/// How many input actions from the Device may wait while a transport control
-/// runs. More would only replay stale presses once a slow player answers.
-const CONTROL_QUEUE: usize = 1;
 
 /// How many Volume steps from the Device may wait while one is carried out.
 /// Setting the Volume takes milliseconds, so this only fills up when the
@@ -38,6 +36,12 @@ const ARTWORK_REQUEST_QUEUE: usize = 4;
 /// title follows within this time, the Device never shows the gap. Short
 /// enough that stopping a player still shows on the Device promptly.
 pub const NOTHING_PLAYING_HOLD: Duration = Duration::from_millis(500);
+
+/// How far a reported position may be from where the Device has moved it on
+/// by itself before it is sent again. Players report rounded positions, and
+/// some report every few seconds while playing; within this the Device
+/// already shows the right second.
+const POSITION_TOLERANCE: Duration = Duration::from_secs(1);
 
 /// Why no session could be started.
 #[derive(Debug, thiserror::Error)]
@@ -133,9 +137,10 @@ impl Session {
     ///
     /// Transport controls run one after the other, apart from reading the
     /// Device, so a slow player does not hold up the Device's other messages.
-    /// While one runs, one more input action may wait; further ones are
-    /// dropped, since a press is meant for now, not for whenever the
-    /// player is done. Volume steps run one after the other too, apart from
+    /// While one runs, one more may wait ([`WaitingControl`]); further ones
+    /// are dropped, since a press is meant for now, not for whenever the
+    /// player is done, except that a seek replaces a seek that waits: the
+    /// last tap on the progress bar is where the user wants to be. Volume steps run one after the other too, apart from
     /// the transport controls, so a slow player does not hold them up.
     pub async fn run<M: MediaSource, V: VolumeControl>(
         self,
@@ -147,11 +152,11 @@ impl Session {
             mut writer,
             ..
         } = self;
-        let (controls, pending_controls) = mpsc::channel(CONTROL_QUEUE);
+        let waiting_control = WaitingControl::default();
         let (steps, pending_steps) = mpsc::channel(VOLUME_QUEUE);
         let (missing_artwork, wanted_artwork) = mpsc::channel(ARTWORK_REQUEST_QUEUE);
         let routes = Routes {
-            controls,
+            controls: &waiting_control,
             steps,
             missing_artwork,
         };
@@ -165,10 +170,10 @@ impl Session {
             // action handed over by `receive_from_device` before that reads
             // on.
             biased;
-            // The pending channels close only once `receive_from_device` has
-            // dropped its senders, which means it has ended, and that ends
-            // the session first.
-            () = carry_out(media, pending_controls) => Err(SessionError::DeviceGone),
+            // `carry_out` never ends. The pending steps close only once
+            // `receive_from_device` has dropped its sender, which means it
+            // has ended, and that ends the session first.
+            never = carry_out(media, &waiting_control) => match never {},
             () = adjust(volume, pending_steps) => Err(SessionError::DeviceGone),
             result = receive_from_device(&mut reader, routes) => result,
             result = send_to_device(&mut writer, changes) => result,
@@ -187,7 +192,9 @@ struct Changes {
 /// Sends the current Now Playing and Volume at once, then every change, and
 /// the Artwork of Now Playing when the Device asks for it. Nothing playing
 /// after something playing goes out only once it has lasted
-/// [`NOTHING_PLAYING_HOLD`] ([`Told`]).
+/// [`NOTHING_PLAYING_HOLD`] ([`Told`]). A change of position alone goes out
+/// only when it is more than [`POSITION_TOLERANCE`] from where the Device
+/// has got to by itself ([`Sent`]).
 ///
 /// Artwork is prepared off this loop ([`ArtworkSupply`]), so Now Playing and
 /// the Volume never wait for it.
@@ -211,14 +218,16 @@ async fn send_to_device(
                     return Ok(());
                 }
                 let current = now_playing.borrow_and_update();
-                if !told.changed(current.is_some()) {
+                let now = Instant::now();
+                let message = current.as_ref().map(|current| current.to_device(now));
+                if !told.changed(message.as_ref(), now) {
                     continue;
                 }
                 // The Artwork follows what the Device is told, so while
                 // nothing playing is held back, the Device still gets the
                 // Artwork of what it shows.
                 artwork.now_playing(current.as_ref().and_then(|current| current.artwork.as_ref()));
-                TrayMessage::NowPlaying(current.as_ref().map(protocol::NowPlaying::from))
+                TrayMessage::NowPlaying(message)
             }
             () = told.nothing_due() => {
                 told = Told::Nothing;
@@ -247,32 +256,44 @@ async fn send_to_device(
 
 /// What the Device was last told about Now Playing, which decides whether a
 /// change goes out at once. Nothing playing after something playing is held
-/// back for [`NOTHING_PLAYING_HOLD`]; something playing always goes out at
-/// once and drops nothing playing held back; nothing playing after nothing
-/// playing changes nothing.
-#[derive(Debug, Clone, Copy, Default)]
+/// back for [`NOTHING_PLAYING_HOLD`]; something playing goes out at once
+/// unless the Device already shows it ([`Sent::agrees`]), and drops nothing
+/// playing held back; nothing playing after nothing playing changes nothing.
+#[derive(Debug, Default)]
 enum Told {
     /// Nothing yet in this session: whatever plays goes out at once.
     #[default]
     NotYet,
-    Something,
+    Something(Sent),
     /// Something, and nothing playing is held back until then.
-    SomethingUntil(Instant),
+    SomethingUntil(Sent, Instant),
     Nothing,
 }
 
 impl Told {
-    /// Now Playing changed to something playing (`true`) or nothing
-    /// (`false`). Returns whether the change goes out now.
-    fn changed(&mut self, something: bool) -> bool {
-        let (next, goes_out) = match (*self, something) {
-            (_, true) => (Self::Something, true),
-            (Self::NotYet, false) => (Self::Nothing, true),
-            (Self::Something, false) => (
-                Self::SomethingUntil(Instant::now() + NOTHING_PLAYING_HOLD),
+    /// Now Playing changed to `current` (`None` for nothing playing), as the
+    /// Device would be told it at `now`. Returns whether it goes out now,
+    /// and if so takes it as told.
+    fn changed(&mut self, current: Option<&protocol::NowPlaying>, now: Instant) -> bool {
+        let (next, goes_out) = match (std::mem::take(self), current) {
+            (Self::Something(sent) | Self::SomethingUntil(sent, _), Some(current))
+                if sent.agrees(current, now) =>
+            {
+                (Self::Something(sent), false)
+            }
+            (_, Some(current)) => (
+                Self::Something(Sent {
+                    message: current.clone(),
+                    at: now,
+                }),
+                true,
+            ),
+            (Self::NotYet, None) => (Self::Nothing, true),
+            (Self::Something(sent), None) => (
+                Self::SomethingUntil(sent, now + NOTHING_PLAYING_HOLD),
                 false,
             ),
-            (Self::SomethingUntil(_) | Self::Nothing, false) => return false,
+            (held @ (Self::SomethingUntil(..) | Self::Nothing), None) => (held, false),
         };
         *self = next;
         goes_out
@@ -280,17 +301,43 @@ impl Told {
 
     /// Finishes when nothing playing held back is due to go out; never while
     /// none is held back.
-    async fn nothing_due(self) {
+    async fn nothing_due(&self) {
         match self {
-            Self::SomethingUntil(until) => tokio::time::sleep_until(until).await,
-            Self::NotYet | Self::Something | Self::Nothing => std::future::pending().await,
+            Self::SomethingUntil(_, until) => tokio::time::sleep_until(*until).await,
+            Self::NotYet | Self::Something(_) | Self::Nothing => std::future::pending().await,
         }
     }
 }
 
+/// Something playing that the Device was told, and when.
+#[derive(Debug)]
+struct Sent {
+    message: protocol::NowPlaying,
+    at: Instant,
+}
+
+impl Sent {
+    /// Whether the Device, told this, already shows `current` at `now`: the
+    /// same in everything but the position, and the position it has moved
+    /// on to by itself within [`POSITION_TOLERANCE`] of `current`'s.
+    fn agrees(&self, current: &protocol::NowPlaying, now: Instant) -> bool {
+        let shown = self
+            .message
+            .clone()
+            .aged(now.saturating_duration_since(self.at));
+        let mut aligned = current.clone();
+        if let (Some(aligned), Some(shown)) = (&mut aligned.progress, shown.progress)
+            && aligned.position().abs_diff(shown.position()) <= POSITION_TOLERANCE
+        {
+            *aligned = aligned.with_position(shown.position());
+        }
+        aligned == shown
+    }
+}
+
 /// Where [`receive_from_device`] hands what the Device asks for over to.
-struct Routes {
-    controls: mpsc::Sender<TransportControl>,
+struct Routes<'a> {
+    controls: &'a WaitingControl,
     steps: mpsc::Sender<Step>,
     missing_artwork: mpsc::Sender<ArtworkId>,
 }
@@ -308,22 +355,23 @@ fn route(action: InputAction) -> Route {
         InputAction::Next => Route::Control(TransportControl::Next),
         InputAction::VolumeUp => Route::Volume(Step::Up),
         InputAction::VolumeDown => Route::Volume(Step::Down),
+        InputAction::Seek(position) => Route::Control(TransportControl::Seek(position)),
     }
 }
 
 /// Passes each input action from the Device on to [`carry_out`] or
-/// [`adjust`], dropping it when their queue is full, and each request for
+/// [`adjust`], dropping it when they have no room for it, and each request for
 /// Artwork on to [`send_to_device`].
 async fn receive_from_device(
     reader: &mut MessageReader<OwnedReadHalf, DeviceMessage>,
-    routes: Routes,
+    routes: Routes<'_>,
 ) -> Result<(), SessionError> {
     while let Some(message) = reader.recv().await? {
         match message {
             DeviceMessage::Input(action) => {
                 tracing::debug!(?action, "input action from the Device");
                 let handed_over = match route(action) {
-                    Route::Control(control) => routes.controls.try_send(control).is_ok(),
+                    Route::Control(control) => routes.controls.offer(control),
                     Route::Volume(step) => routes.steps.try_send(step).is_ok(),
                 };
                 if !handed_over {
@@ -354,10 +402,59 @@ async fn receive_from_device(
     Err(SessionError::DeviceGone)
 }
 
-/// Carries out the transport controls in `pending` on `media`, one after the
-/// other, until `pending` closes.
-async fn carry_out<M: MediaSource>(media: &M, mut pending: mpsc::Receiver<TransportControl>) {
-    while let Some(control) = pending.recv().await {
+/// The transport control that waits while another runs: at most one, as
+/// more would only replay stale presses once a slow player answers. A seek
+/// replaces a seek that waits, so of several taps on the progress bar the
+/// last one is carried out.
+#[derive(Debug, Default)]
+struct WaitingControl {
+    control: Mutex<Option<TransportControl>>,
+    offered: Notify,
+}
+
+impl WaitingControl {
+    /// Lets `control` wait if nothing waits, or if it and the one waiting
+    /// are both seeks. Returns whether it waits now; otherwise it is dropped.
+    fn offer(&self, control: TransportControl) -> bool {
+        let mut waiting = self.lock();
+        let taken = match (*waiting, control) {
+            (None, _) | (Some(TransportControl::Seek(_)), TransportControl::Seek(_)) => {
+                *waiting = Some(control);
+                true
+            }
+            (Some(_), _) => false,
+        };
+        drop(waiting);
+        if taken {
+            self.offered.notify_one();
+        }
+        taken
+    }
+
+    /// The control that waits, once there is one. For one taker only.
+    async fn next(&self) -> TransportControl {
+        loop {
+            if let Some(control) = self.lock().take() {
+                return control;
+            }
+            // A control offered since the check above left a permit, so
+            // this returns at once.
+            self.offered.notified().await;
+        }
+    }
+
+    fn lock(&self) -> MutexGuard<'_, Option<TransportControl>> {
+        // An `Option` of a `Copy` value is consistent even if a holder
+        // panicked.
+        self.control.lock().unwrap_or_else(PoisonError::into_inner)
+    }
+}
+
+/// Carries out the transport controls that wait in `waiting` on `media`, one
+/// after the other. Never ends: the session ends when the Device does.
+async fn carry_out<M: MediaSource>(media: &M, waiting: &WaitingControl) -> Infallible {
+    loop {
+        let control = waiting.next().await;
         match media.control(control).await {
             Ok(()) => {}
             // Every press while nothing plays ends up here; nothing is wrong.

@@ -1,5 +1,6 @@
-use crate::{Artwork, ArtworkId, Percent};
+use crate::{Artwork, ArtworkId, Percent, Progress};
 use serde::{Deserialize, Serialize};
+use std::time::Duration;
 
 /// What the operating system reports as Now Playing, as far as the Device
 /// needs it.
@@ -12,6 +13,21 @@ pub struct NowPlaying {
     /// none. The Device asks for Artwork it does not have
     /// ([`DeviceMessage::MissingArtwork`]).
     pub artwork: Option<ArtworkId>,
+    /// Where playback is in the song; `None` when the Media session reports
+    /// no duration (a live stream, say), and the Device shows no progress.
+    pub progress: Option<Progress>,
+}
+
+impl NowPlaying {
+    /// Now Playing as it is `elapsed` after this one was sent: the position
+    /// moved on while playing ([`Progress::position_after`]).
+    #[must_use]
+    pub fn aged(mut self, elapsed: Duration) -> Self {
+        self.progress = self
+            .progress
+            .map(|progress| progress.after(elapsed, self.playback));
+        self
+    }
 }
 
 /// Whether Now Playing is playing or paused.
@@ -39,6 +55,10 @@ pub enum InputAction {
     /// Turn the Volume down by one step (one click of the dial
     /// counter-clockwise).
     VolumeDown,
+    /// Go to this position in the song. Absolute, so a seek lands where the
+    /// user tapped however far the song has moved on meanwhile, and a seek
+    /// that arrives twice lands in the same place.
+    Seek(Duration),
 }
 
 /// The computer's Volume.

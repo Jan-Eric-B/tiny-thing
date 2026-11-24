@@ -10,7 +10,9 @@ use protocol::ArtworkId;
 use std::fmt;
 use std::hash::{DefaultHasher, Hasher};
 use std::sync::Arc;
+use std::time::Duration;
 use tokio::sync::watch;
+use tokio::time::Instant;
 
 /// What the operating system reports as Now Playing.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -20,6 +22,47 @@ pub struct NowPlaying {
     pub playback: PlaybackState,
     /// `None` when the Media session supplies no Artwork.
     pub artwork: Option<Artwork>,
+    /// `None` when the Media session reports no duration (a live stream,
+    /// say).
+    pub progress: Option<Progress>,
+}
+
+/// Where playback is in the song, and when it was there.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct Progress {
+    /// Where playback was at `at`: position, duration, the rate at which
+    /// the position moves while playing, and whether the Media session
+    /// accepts [`TransportControl::Seek`].
+    pub taken: protocol::Progress,
+    /// When, on this computer's monotonic clock. A player that reports
+    /// rarely while playing leaves this far back.
+    pub at: Instant,
+}
+
+impl NowPlaying {
+    /// Now Playing as the Device is told it at `now`: the position moved on
+    /// to `now` while playing, so the Device can take it as current when it
+    /// arrives.
+    pub fn to_device(&self, now: Instant) -> protocol::NowPlaying {
+        protocol::NowPlaying {
+            title: self.title.clone(),
+            artist: self.artist.clone(),
+            playback: self.playback.into(),
+            artwork: self.artwork.as_ref().map(Artwork::id),
+            progress: self
+                .progress
+                .map(|progress| progress.at_time(now, self.playback)),
+        }
+    }
+}
+
+impl Progress {
+    /// The progress at `now`, with `playback` since it was taken: moved on
+    /// at its rate while playing, never past the end.
+    pub fn at_time(&self, now: Instant, playback: PlaybackState) -> protocol::Progress {
+        self.taken
+            .after(now.saturating_duration_since(self.at), playback.into())
+    }
 }
 
 /// The Artwork a Media session supplies, as the operating system hands it
@@ -96,6 +139,8 @@ pub enum TransportControl {
     Previous,
     /// Go to the next song.
     Next,
+    /// Go to this position in the song.
+    Seek(Duration),
 }
 
 /// Why a transport control did not reach the Media session.
@@ -137,17 +182,6 @@ impl From<PlaybackState> for protocol::PlaybackState {
         match playback {
             PlaybackState::Playing => Self::Playing,
             PlaybackState::Paused => Self::Paused,
-        }
-    }
-}
-
-impl From<&NowPlaying> for protocol::NowPlaying {
-    fn from(now_playing: &NowPlaying) -> Self {
-        Self {
-            title: now_playing.title.clone(),
-            artist: now_playing.artist.clone(),
-            playback: now_playing.playback.into(),
-            artwork: now_playing.artwork.as_ref().map(Artwork::id),
         }
     }
 }

@@ -12,6 +12,16 @@
 //! The transport controls go to whichever Media session is current when they
 //! are called ([`controls`]).
 //!
+//! Progress comes from the session's timeline and playback rate
+//! ([`timeline`]). Players report the timeline when it changes (play, pause,
+//! seek) and some every few seconds while playing, but browsers often only
+//! on those changes; the Device moves the position on by itself in between,
+//! so a rare report is no problem, and a play or pause without a report
+//! carries on from where the song had got to. A timeline change reads the
+//! session like any other change, but does not read the thumbnail again. A
+//! timeline that cannot be read leaves Now Playing without progress; the
+//! title and playback still go out.
+//!
 //! The Artwork (thumbnail) is read as the player encoded it ([`artwork`]),
 //! and only when the session or its media properties changed: a play/pause
 //! reuses the Artwork read last. Now Playing goes out before the thumbnail
@@ -25,22 +35,27 @@ mod controls;
 mod known_artwork;
 mod now_playing;
 mod subscription;
+mod timeline;
 
 use crate::retry::retry_delay;
 use call::CallError;
 use known_artwork::{KnownArtwork, Plan, Song};
 use now_playing::MediaProperties;
+use protocol::PlaybackRate;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::Duration;
 use subscription::{Subscription, mark_and_wake, wake};
+use timeline::{PlaybackInfo, ProgressFollower, Timeline};
 use tokio::sync::{Notify, watch};
 use tokio::task::JoinHandle;
+use tokio::time::Instant;
 use tray_core::media::{ControlError, MediaSource, NowPlaying, TransportControl};
 use windows::Media::Control::{
     GlobalSystemMediaTransportControlsSession as WindowsSession,
     GlobalSystemMediaTransportControlsSessionManager as SessionManager,
     GlobalSystemMediaTransportControlsSessionMediaProperties as WindowsProperties,
+    GlobalSystemMediaTransportControlsSessionPlaybackInfo as WindowsPlaybackInfo,
 };
 use windows::core::{IUnknown, Interface};
 
@@ -89,6 +104,7 @@ impl WindowsMediaSource {
             _manager_events: manager_events,
             followed: None,
             known_artwork: KnownArtwork::default(),
+            progress: ProgressFollower::default(),
             now_playing: sender,
         };
         Ok(Self {
@@ -121,12 +137,29 @@ impl MediaSource for WindowsMediaSource {
     }
 
     async fn control(&self, control: TransportControl) -> Result<(), ControlError> {
-        let command = match control {
-            TransportControl::TogglePlayPause => WindowsSession::TryTogglePlayPauseAsync,
-            TransportControl::Previous => WindowsSession::TrySkipPreviousAsync,
-            TransportControl::Next => WindowsSession::TrySkipNextAsync,
-        };
-        controls::send(&self.manager, command).await
+        match control {
+            TransportControl::TogglePlayPause => {
+                controls::send(&self.manager, WindowsSession::TryTogglePlayPauseAsync).await
+            }
+            TransportControl::Previous => {
+                controls::send(&self.manager, WindowsSession::TrySkipPreviousAsync).await
+            }
+            TransportControl::Next => {
+                controls::send(&self.manager, WindowsSession::TrySkipNextAsync).await
+            }
+            TransportControl::Seek(position) => {
+                controls::send(&self.manager, |session| {
+                    let timeline = session.GetTimelineProperties()?;
+                    let target = timeline::seek_target(
+                        timeline.StartTime()?.Duration,
+                        timeline.EndTime()?.Duration,
+                        position,
+                    );
+                    session.TryChangePlaybackPositionAsync(target)
+                })
+                .await
+            }
+        }
     }
 }
 
@@ -139,13 +172,14 @@ struct Follower {
     _manager_events: [Subscription; 2],
     followed: Option<FollowedSession>,
     known_artwork: KnownArtwork,
+    progress: ProgressFollower,
     now_playing: watch::Sender<Option<NowPlaying>>,
 }
 
 /// The current Media session, with handlers on its change events.
 struct FollowedSession {
     session: WindowsSession,
-    _events: [Subscription; 2],
+    _events: [Subscription; 3],
 }
 
 impl Follower {
@@ -191,12 +225,23 @@ impl Follower {
             return Ok(());
         };
         let read = read_properties(&session).await?;
+        let progress = self.progress.read(
+            read.timeline,
+            PlaybackInfo {
+                playback: now_playing::playback_state(read.text.playback_status),
+                rate: read.rate,
+                can_seek: read.can_seek,
+            },
+            Instant::now(),
+            timeline::utc_now(),
+        );
         let (meanwhile, read_thumbnail) = match self.known_artwork.plan(&read.song) {
             Plan::Reuse(artwork) => (artwork, false),
             Plan::Read { meanwhile } => (meanwhile, true),
         };
         let now_playing = now_playing::now_playing(Some(MediaProperties {
             artwork: meanwhile,
+            progress,
             ..read.text
         }));
         self.publish(now_playing.clone());
@@ -216,6 +261,8 @@ impl Follower {
     }
 
     /// Publishes `now_playing` if it differs from what was published last.
+    /// An unchanged read gives an equal Now Playing, progress included
+    /// ([`ProgressFollower`]), so it publishes nothing.
     fn publish(&self, now_playing: Option<NowPlaying>) {
         self.now_playing.send_if_modified(|published| {
             if *published == now_playing {
@@ -240,6 +287,7 @@ impl Follower {
         }
         self.followed = None;
         self.known_artwork.forget();
+        self.progress.forget();
         let Some(session) = current else {
             tracing::info!("no current Media session");
             return;
@@ -284,6 +332,13 @@ impl FollowedSession {
                     |session| session.PlaybackInfoChanged(&wake(changed)),
                     |session, token| session.RemovePlaybackInfoChanged(token),
                 )?,
+                // Only wakes: the thumbnail stays as it was.
+                Subscription::register(
+                    "TimelinePropertiesChanged",
+                    session,
+                    |session| session.TimelinePropertiesChanged(&wake(changed)),
+                    |session, token| session.RemoveTimelinePropertiesChanged(token),
+                )?,
             ],
         })
     }
@@ -323,17 +378,40 @@ fn current_session(manager: &SessionManager) -> windows::core::Result<Option<Win
     }
 }
 
+/// The timeline of the current Media session, and whether it accepts a
+/// change of position.
+fn read_timeline(
+    session: &WindowsSession,
+    playback_info: &WindowsPlaybackInfo,
+) -> windows::core::Result<(Timeline, bool)> {
+    let read = session.GetTimelineProperties()?;
+    let timeline = Timeline {
+        start: read.StartTime()?.Duration,
+        end: read.EndTime()?.Duration,
+        position: read.Position()?.Duration,
+        last_updated: read.LastUpdatedTime()?.UniversalTime,
+    };
+    let can_seek = playback_info.Controls()?.IsPlaybackPositionEnabled()?;
+    Ok((timeline, can_seek))
+}
+
 /// What a read of the current Media session found, before its thumbnail is
 /// read.
 struct SessionRead {
     /// Holds the thumbnail reference.
     properties: WindowsProperties,
-    /// Without Artwork.
+    /// Without Artwork and progress.
     text: MediaProperties,
     song: Song,
+    /// `None` when it cannot be read.
+    timeline: Option<Timeline>,
+    rate: PlaybackRate,
+    can_seek: bool,
 }
 
-/// Reads what the current Media session reports, except its thumbnail.
+/// Reads what the current Media session reports, except its thumbnail. A
+/// timeline that cannot be read does not fail the read: the session then
+/// has no progress and cannot seek.
 async fn read_properties(session: &WindowsSession) -> Result<SessionRead, CallError> {
     let properties = call::finish(session.TryGetMediaPropertiesAsync()?, READ_TIMEOUT).await?;
     let song = Song {
@@ -342,16 +420,36 @@ async fn read_properties(session: &WindowsSession) -> Result<SessionRead, CallEr
         album_artist: properties.AlbumArtist()?.to_string_lossy(),
         album_title: properties.AlbumTitle()?.to_string_lossy(),
     };
+    let playback_info = session.GetPlaybackInfo()?;
     let text = MediaProperties {
         title: song.title.clone(),
         artist: song.artist.clone(),
         album_artist: song.album_artist.clone(),
-        playback_status: session.GetPlaybackInfo()?.PlaybackStatus()?,
+        playback_status: playback_info.PlaybackStatus()?,
         artwork: None,
+        progress: None,
     };
+    let (timeline, can_seek) = match read_timeline(session, &playback_info) {
+        Ok((timeline, can_seek)) => (Some(timeline), can_seek),
+        Err(error) => {
+            tracing::debug!(%error, "cannot read the timeline");
+            (None, false)
+        }
+    };
+    // Absent (a null reference) for players that never set it: normal.
+    let rate = timeline::rate(
+        playback_info
+            .PlaybackRate()
+            .and_then(|rate| rate.Value())
+            .ok(),
+    );
+    tracing::trace!(?timeline, ?rate, can_seek, "timeline read");
     Ok(SessionRead {
         properties,
         text,
         song,
+        timeline,
+        rate,
+        can_seek,
     })
 }
